@@ -72,20 +72,36 @@ preflight_check() {
 # Sets the global COMMON_ARGS array.
 # ---------------------------------------------------------------------------
 build_common_args() {
-  local gcloud_dir="${GCLOUD_CONFIG_DIR:-$HOME/.config/gcloud}"
+  # Source .env to detect auth mode
+  set -a; source "$ENV_FILE"; set +a
 
   COMMON_ARGS=(
     -it
     --shm-size=256m
     --env-file "$ENV_FILE"
-    -e CLAUDE_CODE_USE_VERTEX=1
-    -e "CLOUD_ML_REGION=${CLOUD_ML_REGION:-global}"
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     -e NO_UPDATE_NOTIFIER=1
     -v "$CLAUDE_CONFIG_DIR:/home/claude/.claude:z"
     -v "$CLAUDE_CONFIG_DIR/claude.json:/home/claude/.claude.json:z"
-    -v "$gcloud_dir:/home/claude/.config/gcloud:ro,z"
   )
+
+  if [[ -n "${ANTHROPIC_VERTEX_PROJECT_ID:-}" ]]; then
+    # Vertex AI mode: pass project/region and mount gcloud credentials
+    local gcloud_dir="${GCLOUD_CONFIG_DIR:-$HOME/.config/gcloud}"
+    COMMON_ARGS+=(
+      -e CLAUDE_CODE_USE_VERTEX=1
+      -e "CLOUD_ML_REGION=${CLOUD_ML_REGION:-global}"
+      -v "$gcloud_dir:/home/claude/.config/gcloud:ro,z"
+    )
+    info "Auth: Vertex AI (project: $ANTHROPIC_VERTEX_PROJECT_ID)"
+  elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    # Direct API key mode: key is passed via --env-file, nothing else needed
+    info "Auth: Anthropic API key"
+  else
+    error "No auth configured in $ENV_FILE"
+    error "Set either ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID"
+    exit 1
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -100,7 +116,7 @@ cmd_setup() {
       cp "$SCRIPT_DIR/.env.example" "$ENV_FILE"
       warn ".env created from .env.example — please edit it now:"
       warn "  $ENV_FILE"
-      warn "Fill in ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION, then re-run setup."
+      warn "Set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID, then re-run setup."
       exit 0
     else
       error ".env.example not found alongside this script. Cannot continue."
@@ -111,8 +127,12 @@ cmd_setup() {
   # 2. Source .env to check required vars
   set -a; source "$ENV_FILE"; set +a
 
-  if [[ -z "${ANTHROPIC_VERTEX_PROJECT_ID:-}" ]]; then
-    error "ANTHROPIC_VERTEX_PROJECT_ID is not set in $ENV_FILE"
+  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+    info "Auth mode: Anthropic API key"
+  elif [[ -n "${ANTHROPIC_VERTEX_PROJECT_ID:-}" ]]; then
+    info "Auth mode: Vertex AI (project: $ANTHROPIC_VERTEX_PROJECT_ID)"
+  else
+    error "No auth configured. Set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID in $ENV_FILE"
     exit 1
   fi
 
@@ -137,14 +157,16 @@ cmd_setup() {
 
   info "Container config directory: $CLAUDE_CONFIG_DIR"
 
-  # 5. Check gcloud credentials
-  local gcloud_creds="${GCLOUD_CONFIG_DIR:-$HOME/.config/gcloud}"
-  if [[ ! -d "$gcloud_creds" ]]; then
-    warn "gcloud config directory not found: $gcloud_creds"
-    warn "Run: gcloud auth application-default login"
-    warn "Then re-run setup or just launch — the mount will work once credentials exist."
-  else
-    info "gcloud credentials directory found: $gcloud_creds"
+  # 5. Check gcloud credentials (Vertex AI only)
+  if [[ -n "${ANTHROPIC_VERTEX_PROJECT_ID:-}" ]]; then
+    local gcloud_creds="${GCLOUD_CONFIG_DIR:-$HOME/.config/gcloud}"
+    if [[ ! -d "$gcloud_creds" ]]; then
+      warn "gcloud config directory not found: $gcloud_creds"
+      warn "Run: gcloud auth application-default login"
+      warn "Then re-run setup or just launch — the mount will work once credentials exist."
+    else
+      info "gcloud credentials directory found: $gcloud_creds"
+    fi
   fi
 
   # 6. Build the image
@@ -349,8 +371,9 @@ Launch modes:
   $(basename "$0") ~/projects/my-app        Mount specific project as /workspace
   $(basename "$0") ~/proj/fe ~/proj/be      Mount multiple as /workspace/fe, /workspace/be
 
-Environment variables (set in .env or shell):
-  ANTHROPIC_VERTEX_PROJECT_ID   GCP project with Vertex AI Claude access
+Environment variables (set in .env):
+  ANTHROPIC_API_KEY             Direct Anthropic API key (option A)
+  ANTHROPIC_VERTEX_PROJECT_ID   GCP project with Vertex AI (option B)
   CLOUD_ML_REGION               Vertex AI region (default: global)
   CLAUDE_CONFIG_DIR             Container Claude config (default: ./config in repo)
   GCLOUD_CONFIG_DIR             gcloud config path (default: ~/.config/gcloud)
