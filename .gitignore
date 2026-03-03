@@ -1,0 +1,37 @@
+# Secrets
+.env
+
+# Claude Code local project data (this repo's own .claude/)
+.claude/
+
+# macOS
+.DS_Store
+
+# Test artifacts
+*.png
+
+# Container runtime artifacts
+.mcp.json
+.playwright-mcp/
+
+# Symlink (user creates locally)
+claude-dev
+
+# Claude Code runtime data (generated inside config/ during container use)
+config/backups/
+config/cache/
+config/debug/
+config/file-history/
+config/paste-cache/
+config/plans/
+config/plugins/
+config/projects/
+config/session-env/
+config/shell-snapshots/
+config/tasks/
+config/teams/
+config/todos/
+config/history.jsonl
+
+# Claude Code rewrites claude.json on exit; mcp.json is the source of truth.
+# claude.json is committed with a clean baseline but runtime changes are ignored.

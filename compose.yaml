@@ -1,0 +1,91 @@
+# Claude Code Development Environment — Compose file
+# Compatible with both Podman Compose and Docker Compose.
+#
+# USAGE:
+#   From any project directory:
+#     cd /path/to/your/project
+#     podman-compose -f /path/to/this/compose.yaml run --rm claude
+#
+# Or use the wrapper script: claude-dev (see claude-dev.sh)
+
+name: claude-dev
+
+services:
+  claude:
+    # Build from local Containerfile (first time), or use pre-built image.
+    # Tag name must match what you used when building:
+    #   podman build -t claude-dev -f Containerfile .
+    image: claude-dev:latest
+    build:
+      context: .
+      dockerfile: Containerfile
+
+    # Keep stdin open and allocate a pseudo-TTY — required for the
+    # interactive Claude Code terminal UI.
+    stdin_open: true
+    tty: true
+
+    # -----------------------------------------------------------------------
+    # Environment variables
+    # All secrets and config come from .env (never committed to git).
+    # See .env.example for the full list of variables.
+    # -----------------------------------------------------------------------
+    env_file:
+      - .env
+
+    environment:
+      # Tell Claude Code to use Vertex AI instead of direct Anthropic API.
+      # These can also live in .env; putting them here makes them visible
+      # as documentation of what the container expects.
+      CLAUDE_CODE_USE_VERTEX: "1"
+      ANTHROPIC_VERTEX_PROJECT_ID: ${ANTHROPIC_VERTEX_PROJECT_ID}
+      CLOUD_ML_REGION: ${CLOUD_ML_REGION:-us-east5}
+
+      # Playwright: tell it where we installed the browser at build time.
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+
+      # Suppress npm update nag inside container.
+      NO_UPDATE_NOTIFIER: "1"
+
+    # -----------------------------------------------------------------------
+    # Volume mounts
+    # -----------------------------------------------------------------------
+    volumes:
+      # PROJECT WORKSPACE — the only part of your filesystem Claude can touch.
+      # Set PROJECT_DIR in .env or export it before running compose.
+      # Defaults to current working directory if unset.
+      - ${PROJECT_DIR:-.}:/workspace:z
+
+      # GOOGLE CLOUD CREDENTIALS — read-only mount of your host gcloud config.
+      # Required for Vertex AI authentication.
+      # The :z suffix handles SELinux labeling (harmless on non-SELinux systems).
+      - ${GCLOUD_CONFIG_DIR:-~/.config/gcloud}:/home/claude/.config/gcloud:ro,z
+
+      # CLAUDE CODE CONFIG — container-specific settings, commands, agents,
+      # and UADF framework. Mounted from config/ in this repo by default.
+      # This is intentionally separate from host ~/.claude/ so container
+      # and host configs can diverge (e.g. YOLO permissions in container).
+      - ${CLAUDE_CONFIG_DIR:-./config}:/home/claude/.claude:z
+
+      # CLAUDE USER CONFIG — Claude Code expects a .claude.json at $HOME.
+      # Stores onboarding state, usage tracking, etc.
+      - ${CLAUDE_CONFIG_DIR:-./config}/claude.json:/home/claude/.claude.json:z
+
+      # MCP CONFIG — project-level .mcp.json is read by Claude Code on
+      # startup and is NOT overwritten (unlike ~/.claude.json).
+      - ${CLAUDE_CONFIG_DIR:-./config}/mcp.json:/workspace/.mcp.json:ro,z
+
+    # Chromium needs more shared memory than the container default (64KB).
+    shm_size: 256m
+
+    working_dir: /workspace
+
+    # -----------------------------------------------------------------------
+    # Resource limits (optional but polite on a shared workstation)
+    # -----------------------------------------------------------------------
+    # Uncomment if you want to cap what the container can consume:
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 4g
+    #       cpus: "2.0"
