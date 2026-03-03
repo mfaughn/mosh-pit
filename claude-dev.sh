@@ -98,9 +98,8 @@ build_common_args() {
     # Direct API key mode: key is passed via --env-file, nothing else needed
     info "Auth: Anthropic API key"
   else
-    error "No auth configured in $ENV_FILE"
-    error "Set either ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID"
-    exit 1
+    # OAuth mode: Claude Code handles auth via browser login
+    info "Auth: OAuth (Claude Pro/Max)"
   fi
 }
 
@@ -132,8 +131,7 @@ cmd_setup() {
   elif [[ -n "${ANTHROPIC_VERTEX_PROJECT_ID:-}" ]]; then
     info "Auth mode: Vertex AI (project: $ANTHROPIC_VERTEX_PROJECT_ID)"
   else
-    error "No auth configured. Set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID in $ENV_FILE"
-    exit 1
+    info "Auth mode: OAuth (Claude Code will prompt for browser login)"
   fi
 
   # 3. Verify container config directory exists
