@@ -21,6 +21,25 @@
 - Be direct; skip unnecessary preamble
 - When I ask "why," explain the tradeoffs, not just the choice
 
+## Container Package Tracking
+
+This environment runs inside a container. When you install system packages
+(apt, pip, npm -g, etc.) to get work done, also append the install command
+to `.claude-dev/provision.sh` in the project root. Create the file with a
+bash shebang if it doesn't exist. Keep the script idempotent (use
+`apt-get install -y`, `pip install`, etc.). Example:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+apt-get update && apt-get install -y --no-install-recommends default-jdk
+pip install some-package
+```
+
+This file is checked into the project and automatically re-run when the
+container is recreated with `claude-dev fresh`, so all project-specific
+dependencies are restored without manual intervention.
+
 ## Web Search Policy
 Do not use the WebSearch tool directly — it is blocked on this model. Instead,
 always delegate web searches to the `web-researcher` subagent, which runs on a

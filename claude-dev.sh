@@ -75,6 +75,10 @@ build_common_args() {
   # Source .env to detect auth mode
   set -a; source "$ENV_FILE"; set +a
 
+  # Host commands directory — shared between host and container so skills
+  # only need to be maintained in one place (~/.claude/commands/).
+  local host_commands_dir="$HOME/.claude/commands"
+
   COMMON_ARGS=(
     -it
     --shm-size=256m
@@ -84,6 +88,13 @@ build_common_args() {
     -v "$CLAUDE_CONFIG_DIR:/home/claude/.claude:z"
     -v "$CLAUDE_CONFIG_DIR/claude.json:/home/claude/.claude.json:z"
   )
+
+  # Mount host commands over container config commands so both environments
+  # share the same skills. Falls back to config/commands/ if host dir missing.
+  if [[ -d "$host_commands_dir" ]]; then
+    COMMON_ARGS+=(-v "$host_commands_dir:/home/claude/.claude/commands:ro,z")
+    info "Commands: $host_commands_dir (shared with host)"
+  fi
 
   if [[ -n "${ANTHROPIC_VERTEX_PROJECT_ID:-}" ]]; then
     # Vertex AI mode: pass project/region and mount gcloud credentials
@@ -260,10 +271,24 @@ with open('$claude_json', 'w') as f: json.dump(cj, f, indent=2)
     done
   fi
 
-  info "Press Ctrl+C or type /exit to quit."
-  echo ""
-
-  $RUNTIME run "${COMMON_ARGS[@]}" "$IMAGE_NAME" --dangerously-skip-permissions
+  # Check for a per-project provision script. Claude Code maintains this file
+  # in the project directory when it installs packages inside the container.
+  local provision_script="${resolved[0]}/.claude-dev/provision.sh"
+  if [[ -f "$provision_script" ]]; then
+    info "Provision script found — creating container and installing packages..."
+    $RUNTIME create "${COMMON_ARGS[@]}" "$IMAGE_NAME" claude --dangerously-skip-permissions
+    $RUNTIME start "$container_name"
+    $RUNTIME exec --user root "$container_name" bash /workspace/.claude-dev/provision.sh
+    $RUNTIME stop "$container_name"
+    info "Provisioning complete."
+    info "Press Ctrl+C or type /exit to quit."
+    echo ""
+    $RUNTIME start -ai "$container_name"
+  else
+    info "Press Ctrl+C or type /exit to quit."
+    echo ""
+    $RUNTIME run "${COMMON_ARGS[@]}" "$IMAGE_NAME" claude --dangerously-skip-permissions
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -333,6 +358,32 @@ cmd_restore() {
 }
 
 # ---------------------------------------------------------------------------
+# provision: run the provision script against an existing container
+# ---------------------------------------------------------------------------
+cmd_provision() {
+  local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
+  local provision_script="$(pwd)/.claude-dev/provision.sh"
+
+  if [[ ! -f "$provision_script" ]]; then
+    error "No provision script found: $provision_script"
+    error "Claude Code creates this file automatically when it installs packages."
+    exit 1
+  fi
+
+  if ! $RUNTIME container exists "$container_name" 2>/dev/null; then
+    error "No container found: $container_name"
+    error "Start claude-dev from this project directory first."
+    exit 1
+  fi
+
+  info "Running provision script in $container_name..."
+  $RUNTIME start "$container_name" 2>/dev/null || true
+  $RUNTIME exec --user root "$container_name" bash /workspace/.claude-dev/provision.sh
+  $RUNTIME stop "$container_name" 2>/dev/null || true
+  info "Provisioning complete."
+}
+
+# ---------------------------------------------------------------------------
 # fresh: remove existing container and start clean from base image
 # ---------------------------------------------------------------------------
 cmd_fresh() {
@@ -362,6 +413,7 @@ Commands:
   snapshots List saved snapshots for the current project
   restore   Replace current container with a saved snapshot
   fresh     Remove existing container and start clean from base image
+  provision Re-run config/provision.sh in the project's container
   help      Show this help
 
 Launch modes:
@@ -403,6 +455,7 @@ case "${1:-}" in
   snapshots)      cmd_snapshots ;;
   restore)        shift; cmd_restore "$@" ;;
   fresh)          shift; cmd_fresh "$@" ;;
+  provision)      cmd_provision ;;
   help|-h|--help) cmd_help ;;
   "")             cmd_launch ;;
   *)
