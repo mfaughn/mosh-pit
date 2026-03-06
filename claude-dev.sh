@@ -52,6 +52,27 @@ detect_runtime() {
 RUNTIME=$(detect_runtime)
 
 # ---------------------------------------------------------------------------
+# Install plugins from a file (one plugin per line, # comments ignored)
+# ---------------------------------------------------------------------------
+install_plugins() {
+  local container_name="$1"
+  local plugin_file="$2"
+
+  [[ -f "$plugin_file" ]] || return 0
+
+  while IFS= read -r line; do
+    # Skip comments and blank lines
+    line="${line%%#*}"
+    line="$(echo "$line" | xargs)"
+    [[ -z "$line" ]] && continue
+
+    info "Installing plugin: $line"
+    $RUNTIME exec "$container_name" claude plugin install "$line" || \
+      warn "Failed to install plugin: $line"
+  done < "$plugin_file"
+}
+
+# ---------------------------------------------------------------------------
 # Common: verify prerequisites before launching
 # ---------------------------------------------------------------------------
 preflight_check() {
@@ -75,8 +96,8 @@ build_common_args() {
   # Source .env to detect auth mode
   set -a; source "$ENV_FILE"; set +a
 
-  # Host commands directory — shared between host and container so skills
-  # only need to be maintained in one place (~/.claude/commands/).
+  # Host directories shared between host and container so skills and plugins
+  # only need to be maintained in one place (~/.claude/).
   local host_commands_dir="$HOME/.claude/commands"
 
   COMMON_ARGS=(
@@ -89,8 +110,8 @@ build_common_args() {
     -v "$CLAUDE_CONFIG_DIR/claude.json:/home/claude/.claude.json:z"
   )
 
-  # Mount host commands over container config commands so both environments
-  # share the same skills. Falls back to config/commands/ if host dir missing.
+  # Mount host commands and plugins over container config so both environments
+  # share the same skills/plugins. Falls back to config/ versions if missing.
   if [[ -d "$host_commands_dir" ]]; then
     COMMON_ARGS+=(-v "$host_commands_dir:/home/claude/.claude/commands:ro,z")
     info "Commands: $host_commands_dir (shared with host)"
@@ -271,22 +292,41 @@ with open('$claude_json', 'w') as f: json.dump(cj, f, indent=2)
     done
   fi
 
-  # Check for a per-project provision script. Claude Code maintains this file
-  # in the project directory when it installs packages inside the container.
+  # Check if provisioning or plugin installation is needed.
   local provision_script="${resolved[0]}/.claude-dev/provision.sh"
-  if [[ -f "$provision_script" ]]; then
-    info "Provision script found — creating container and installing packages..."
+  local default_plugins="$SCRIPT_DIR/config/default-plugins.txt"
+  local project_plugins="${resolved[0]}/.claude-dev/plugins.txt"
+  local needs_setup=false
+
+  [[ -f "$provision_script" ]] && needs_setup=true
+  [[ -f "$default_plugins" ]] && needs_setup=true
+  [[ -f "$project_plugins" ]] && needs_setup=true
+
+  if [[ "$needs_setup" == true ]]; then
+    # Create container, run setup steps, then start interactively.
     $RUNTIME create "${COMMON_ARGS[@]}" "$IMAGE_NAME" claude --dangerously-skip-permissions
     $RUNTIME start "$container_name"
-    $RUNTIME exec --user root "$container_name" bash /workspace/.claude-dev/provision.sh
+
+    # Run provision script (system packages) as root.
+    if [[ -f "$provision_script" ]]; then
+      info "Running provision script..."
+      $RUNTIME exec --user root "$container_name" bash /workspace/.claude-dev/provision.sh
+    fi
+
+    # Install plugins from default list and per-project list.
+    install_plugins "$container_name" "$default_plugins"
+    install_plugins "$container_name" "$project_plugins"
+
     $RUNTIME stop "$container_name"
-    info "Provisioning complete."
-    info "Press Ctrl+C or type /exit to quit."
-    echo ""
+    info "Setup complete."
+  fi
+
+  info "Press Ctrl+C or type /exit to quit."
+  echo ""
+
+  if [[ "$needs_setup" == true ]]; then
     $RUNTIME start -ai "$container_name"
   else
-    info "Press Ctrl+C or type /exit to quit."
-    echo ""
     $RUNTIME run "${COMMON_ARGS[@]}" "$IMAGE_NAME" claude --dangerously-skip-permissions
   fi
 }

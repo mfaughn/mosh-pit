@@ -1,0 +1,10 @@
+# Default plugins installed in every new claude-dev container.
+# One plugin per line, in the format: name@marketplace
+# Lines starting with # are ignored.
+
+playwright@claude-plugins-official
+code-review@claude-plugins-official
+code-simplifier@claude-plugins-official
+ralph-loop@claude-plugins-official
+commit-commands@claude-plugins-official
+frontend-design@claude-plugins-official

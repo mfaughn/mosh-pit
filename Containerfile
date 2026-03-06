@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libpango-1.0-0 \
     libpangocairo-1.0-0 \
+    # Minimal init process — reaps zombie subprocesses (see tini-fix-brief.md)
+    tini \
     # Useful utilities
     git \
     curl \
@@ -74,7 +76,7 @@ USER claude
 WORKDIR /workspace
 
 # ---------------------------------------------------------------------------
-# Entrypoint
+# Entrypoint — tini as PID 1 to reap zombie subprocesses
 # ---------------------------------------------------------------------------
-ENTRYPOINT ["claude"]
-CMD ["--dangerously-skip-permissions"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
+CMD ["claude", "--dangerously-skip-permissions"]

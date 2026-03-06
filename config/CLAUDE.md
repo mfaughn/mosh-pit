@@ -40,6 +40,10 @@ This file is checked into the project and automatically re-run when the
 container is recreated with `claude-dev fresh`, so all project-specific
 dependencies are restored without manual intervention.
 
+Similarly, if you install a plugin via `/plugin install` that is specific to
+this project, append its name to `.claude-dev/plugins.txt` (one per line,
+format: `name@marketplace`). These are also reinstalled on fresh containers.
+
 ## Web Search Policy
 Do not use the WebSearch tool directly — it is blocked on this model. Instead,
 always delegate web searches to the `web-researcher` subagent, which runs on a
