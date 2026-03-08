@@ -110,7 +110,6 @@ build_common_args() {
   local host_commands_dir="$HOME/.claude/commands"
 
   COMMON_ARGS=(
-    -it
     --shm-size=256m
     --env-file "$ENV_FILE"
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
@@ -287,10 +286,12 @@ with open('$claude_json', 'w') as f: json.dump(cj, f, indent=2)
 
   # Check if a stopped container with this name already exists.
   if $RUNTIME container exists "$container_name" 2>/dev/null; then
-    info "Restarting existing container: $container_name"
+    info "Resuming existing container: $container_name"
     info "Press Ctrl+C or type /exit to quit."
     echo ""
-    $RUNTIME start -ai "$container_name"
+    $RUNTIME start "$container_name"
+    $RUNTIME exec -it "$container_name" claude --dangerously-skip-permissions
+    $RUNTIME stop "$container_name" 2>/dev/null || true
     return
   fi
 
@@ -326,11 +327,12 @@ with open('$claude_json', 'w') as f: json.dump(cj, f, indent=2)
   [[ -f "$default_plugins" ]] && needs_setup=true
   [[ -f "$project_plugins" ]] && needs_setup=true
 
-  if [[ "$needs_setup" == true ]]; then
-    # Create container, run setup steps, then start interactively.
-    $RUNTIME create "${COMMON_ARGS[@]}" "$IMAGE_NAME" claude --dangerously-skip-permissions
-    $RUNTIME start "$container_name"
+  # Run the container as a persistent daemon (sleep infinity) so we can
+  # always attach via `exec -it`. This avoids TTY issues with `podman start -ai`
+  # on macOS, where full-screen TUI output doesn't render on reattach.
+  $RUNTIME run -d "${COMMON_ARGS[@]}" "$IMAGE_NAME" sleep infinity
 
+  if [[ "$needs_setup" == true ]]; then
     # Run provision script (system packages) as root.
     if [[ -f "$provision_script" ]]; then
       info "Running provision script..."
@@ -341,18 +343,13 @@ with open('$claude_json', 'w') as f: json.dump(cj, f, indent=2)
     install_plugins "$container_name" "$default_plugins"
     install_plugins "$container_name" "$project_plugins"
 
-    $RUNTIME stop "$container_name"
     info "Setup complete."
   fi
 
   info "Press Ctrl+C or type /exit to quit."
   echo ""
-
-  if [[ "$needs_setup" == true ]]; then
-    $RUNTIME start -ai "$container_name"
-  else
-    $RUNTIME run "${COMMON_ARGS[@]}" "$IMAGE_NAME" claude --dangerously-skip-permissions
-  fi
+  $RUNTIME exec -it "$container_name" claude --dangerously-skip-permissions
+  $RUNTIME stop "$container_name" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
