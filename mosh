@@ -114,11 +114,14 @@ build_common_args() {
     --env-file "$ENV_FILE"
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     -e NO_UPDATE_NOTIFIER=1
-    -v "$CLAUDE_CONFIG_DIR:/home/claude/.claude:z"
+    # Repo config is mounted read-only at /mosh-config; synced into ~/.claude at launch.
+    # ~/.claude itself lives in a named Podman volume so Claude Code can write to it
+    # (e.g., .credentials.json for OAuth token storage).
+    -v "$CLAUDE_CONFIG_DIR:/mosh-config:ro,z"
   )
 
-  # Mount host commands and plugins over container config so both environments
-  # share the same skills/plugins. Falls back to config/ versions if missing.
+  # Mount host commands so both host and container share the same slash commands.
+  # Falls back to config/commands if host doesn't have them.
   if [[ -d "$host_commands_dir" ]]; then
     COMMON_ARGS+=(-v "$host_commands_dir:/home/claude/.claude/commands:ro,z")
     info "Commands: $host_commands_dir (shared with host)"
@@ -187,8 +190,7 @@ cmd_setup() {
 
   # 4. Ensure claude.json exists for user-level config
   if [[ ! -f "$CLAUDE_CONFIG_DIR/claude.json" ]]; then
-    echo '{"hasCompletedOnboarding": true, "autoUpdates": false}' \
-      > "$CLAUDE_CONFIG_DIR/claude.json"
+    echo '{"autoUpdates": false}' > "$CLAUDE_CONFIG_DIR/claude.json"
     info "Created claude.json in $CLAUDE_CONFIG_DIR"
   fi
 
@@ -268,13 +270,33 @@ cmd_launch() {
   # Container name derived from the current working directory.
   local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
 
+  # Named volume for ~/.claude — persists credentials and state across sessions.
+  # Each container gets its own volume so projects don't share OAuth tokens.
+  local claude_home_vol="${container_name}-claude-home"
+
+  # Snippet run inside the container before launching Claude.
+  # Syncs config files from the read-only repo mount (/mosh-config) into the
+  # writable ~/.claude volume. Credentials (.credentials.json) are never touched.
+  local SYNC_AND_LAUNCH
+  SYNC_AND_LAUNCH='
+    stty sane
+    mkdir -p ~/.claude
+    for f in settings.json CLAUDE.md mcp.json; do
+      [ -f "/mosh-config/$f" ] && cp "/mosh-config/$f" "$HOME/.claude/$f" 2>/dev/null || true
+    done
+    for d in agents templates uadf; do
+      [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
+    done
+    exec claude --dangerously-skip-permissions
+  '
+
   # Check if a stopped container with this name already exists.
   if $RUNTIME container exists "$container_name" 2>/dev/null; then
     info "Resuming existing container: $container_name"
     info "Press Ctrl+C or type /exit to quit."
     echo ""
     $RUNTIME start "$container_name"
-    $RUNTIME exec -it "$container_name" bash -c "stty sane; dbus-run-session -- bash -c 'echo -n | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; exec claude --dangerously-skip-permissions'"
+    $RUNTIME exec -it "$container_name" bash -c "$SYNC_AND_LAUNCH"
     $RUNTIME stop "$container_name" 2>/dev/null || true
     return
   fi
@@ -282,6 +304,8 @@ cmd_launch() {
   # No existing container — create a new one.
   build_common_args
   COMMON_ARGS+=(--name "$container_name")
+  # Named volume for ~/.claude provides a writable home for credentials and state.
+  COMMON_ARGS+=(--mount "type=volume,source=${claude_home_vol},target=/home/claude/.claude")
   info "Container: $container_name (new)"
 
   if [[ ${#resolved[@]} -eq 1 ]]; then
@@ -332,7 +356,7 @@ cmd_launch() {
 
   info "Press Ctrl+C or type /exit to quit."
   echo ""
-  $RUNTIME exec -it "$container_name" bash -c "stty sane; dbus-run-session -- bash -c 'echo -n | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; exec claude --dangerously-skip-permissions'"
+  $RUNTIME exec -it "$container_name" bash -c "$SYNC_AND_LAUNCH"
   $RUNTIME stop "$container_name" 2>/dev/null || true
 }
 

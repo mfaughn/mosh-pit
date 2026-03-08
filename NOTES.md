@@ -2,31 +2,33 @@
 
 ## Architecture Decisions
 
-### Separate Config Directories (2026-02-24)
+### Config and Credentials Architecture (updated 2026-03-08)
 
-The container uses its own Claude Code configuration, separate from the host
-`~/.claude/` directory. This is intentional:
+The container's `~/.claude/` directory is split into two layers:
 
-- **Host** (`~/.claude/`): Used when running Claude Code directly on macOS.
-  Standard permissions, interactive approval mode.
-- **Container** (`config/` in this repo, mounted as `/home/claude/.claude`): Used
-  inside the container. YOLO mode with permissive settings. All tools
-  pre-approved in `settings.json`.
+1. **Named Podman volume** (`cc-<project>-claude-home`, mounted as `/home/claude/.claude`):
+   Fully writable. Created automatically on first launch. Persists across
+   sessions — including `mosh fresh`. Stores credentials, Claude state, and
+   any runtime writes from Claude Code.
+
+2. **Repo bind mount** (`config/`, mounted read-only at `/mosh-config`):
+   Contains the managed config files (settings.json, CLAUDE.md, agents/, etc.).
+   At each launch, the startup command syncs these into the named volume so
+   the container always has the latest versions.
 
 **What this means in practice:**
-- If you add a new slash command to `~/.claude/commands/`, you must also copy
-  it to `config/commands/` if you want it available in the container.
-- The container's `settings.json` has different permissions than the host's.
-  The container version allows all tools and denies only `WebSearch` (which is
-  delegated to a Sonnet-powered subagent).
-- Changes to files in `config/` take effect on the next container start (no
-  rebuild needed, since it's a bind mount).
+- OAuth credentials survive `mosh fresh` (the volume is not deleted).
+  To reset credentials, manually remove the volume: `podman volume rm cc-<project>-claude-home`
+- Config file changes in `config/` take effect on next launch (copied in).
+- Slash commands from `~/.claude/commands/` on the host are bind-mounted
+  directly into the volume at `~/.claude/commands/`, overriding whatever
+  the volume has at that path.
 
 ### Mirrored Files
 
-These files exist in both `~/.claude/` and `config/` but may diverge:
+These files exist in both `~/.claude/` (host) and `config/` (repo) but may diverge:
 
-| File | Host (`~/.claude/`) | Container (`config/`) |
+| File | Host (`~/.claude/`) | Container (synced from `config/`) |
 |------|--------------------|-----------------------|
 | `CLAUDE.md` | Standard preferences | Adds web search policy |
 | `settings.json` | Limited permissions, sonnet default | YOLO permissions, WebSearch denied |
@@ -45,6 +47,59 @@ it for Sonnet 4.5. To work around this:
   `model: sonnet`, which has web search access
 - The container's `CLAUDE.md` instructs Claude to use this subagent for all
   web searches instead of calling WebSearch directly
+
+### OAuth Token Persistence in Containers (2026-03-08)
+
+**Symptom**: OAuth login flow completes ("Login successful"), but Claude
+immediately shows "Not logged in · Please run /login". No token persisted.
+
+**The investigation (what didn't work)**:
+
+1. **gnome-keyring approach**: Assumed Claude Code on Linux used
+   `libsecret`/`gnome-keyring` for OAuth storage (like some desktop apps do).
+   Added `dbus` and `gnome-keyring` to the Containerfile and wrapped the launch
+   command in `dbus-run-session -- bash -c 'gnome-keyring-daemon --unlock ...'`.
+   Result: no change — login succeeded but token still didn't persist.
+
+2. **Suppressed daemon output**: The gnome-keyring startup command used
+   `>/dev/null 2>&1`, discarding the `GNOME_KEYRING_CONTROL` env var that
+   applications use to find the daemon socket. Tried capturing and exporting
+   it with `eval $(gnome-keyring-daemon --unlock ...)`. Still no change.
+
+3. **Onboarding flag**: `config/claude.json` had `"hasCompletedOnboarding": true`
+   which caused Claude to skip auth flow and render a blank cursor. Fixed by
+   removing that key — separate bug, not the credentials issue.
+
+4. **Mounting `~/.claude.json`**: Tried bind-mounting `config/claude.json`
+   as `/home/claude/.claude.json` to inject MCP server config. This caused
+   Claude to render only a blank cursor. Root cause unknown; mount removed
+   entirely. MCP config is now handled differently.
+
+**Root cause** (found by reading Claude Code's source):
+
+Claude Code on Linux does **not** use gnome-keyring. It stores OAuth tokens
+in a plain JSON file: `~/.claude/.credentials.json` (the `Tb8`/`"plaintext"`
+storage backend in Claude Code's internal credential store, versus `VC4`/
+`"keychain"` on macOS).
+
+The `config/` directory was bind-mounted as `/home/claude/.claude/`. On macOS
+with rootless Podman, bind-mounted directories retain their host ownership
+(uid 501). The container user (`claude`, uid 1001) was mapped as "other", and
+the directory permissions were `drwxr-xr-x` — no write for others. So every
+call to write `.credentials.json` failed silently. Claude logged the failure
+only to telemetry, not to the UI, so the user only saw "Login successful" then
+"Not logged in".
+
+**The fix**:
+
+Replace the bind-mount of `config/` as `~/.claude/` with a **named Podman
+volume**. Named volumes are owned by the container user inside the container,
+so Claude Code can write freely. The repo's config files are now mounted
+read-only at `/mosh-config/` and synced into the volume at each launch.
+
+Key takeaway: on Linux, Claude Code credential storage requires a writable
+`~/.claude/` directory. A bind-mounted host directory with a different UID
+will silently fail all credential writes.
 
 ### Launch Modes (2026-02-24)
 
@@ -118,16 +173,15 @@ container, these map to:
 | `compose.yaml` | Service definition, volumes, env wiring | Yes |
 | `.env.example` | Template for secrets | Yes |
 | `.env` | Actual secrets | No (gitignored) |
-| `claude-dev.sh` | Setup and launcher script | Yes |
-| `config/` | Container-specific Claude Code config (mounted as /home/claude/.claude) | Yes |
+| `mosh` | Setup and launcher script | Yes |
+| `config/` | Repo-managed config files, synced into container at launch | Yes |
 | `config/settings.json` | YOLO permissions, denied WebSearch | Yes |
-| `config/claude.json` | User-level state, MCP servers (re-injected each launch) | Yes |
-| `config/mcp.json` | MCP server definitions (source of truth for injection) | Yes |
+| `config/claude.json` | User-level config baseline (autoUpdates, etc.) | Yes |
+| `config/mcp.json` | MCP server definitions | Yes |
 | `config/CLAUDE.md` | Container-specific global preferences | Yes |
 | `config/commands/` | Slash commands (mirrored from ~/.claude/commands/) | Yes |
 | `config/uadf/` | UADF framework (mirrored from ~/.claude/uadf/) | Yes |
 | `config/templates/` | Templates (mirrored from ~/.claude/templates/) | Yes |
 | `config/agents/` | Custom subagents (web-researcher.md) | Yes |
-| `HANDOFF.md` | Original planning conversation handoff | Yes |
 | `NOTES.md` | This file — ongoing project notes | Yes |
 | `README.md` | User-facing documentation | Yes |
