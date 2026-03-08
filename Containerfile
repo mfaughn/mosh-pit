@@ -31,6 +31,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpangocairo-1.0-0 \
     # Minimal init process — reaps zombie subprocesses (see tini-fix-brief.md)
     tini \
+    # D-Bus and keyring — required for OAuth credential storage on Linux
+    dbus \
+    gnome-keyring \
     # Useful utilities
     git \
     curl \

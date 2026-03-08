@@ -115,7 +115,6 @@ build_common_args() {
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     -e NO_UPDATE_NOTIFIER=1
     -v "$CLAUDE_CONFIG_DIR:/home/claude/.claude:z"
-    -v "$CLAUDE_CONFIG_DIR/claude.json:/home/claude/.claude.json:z"
   )
 
   # Mount host commands and plugins over container config so both environments
@@ -269,28 +268,13 @@ cmd_launch() {
   # Container name derived from the current working directory.
   local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
 
-  # Inject MCP servers into claude.json before launch.
-  # Claude Code overwrites this file on exit, stripping manually-added keys.
-  # We re-inject from mcp.json every launch so servers are always registered.
-  local mcp_config="$CLAUDE_CONFIG_DIR/mcp.json"
-  local claude_json="$CLAUDE_CONFIG_DIR/claude.json"
-  if [[ -f "$mcp_config" && -f "$claude_json" ]]; then
-    python3 -c "
-import json, sys
-with open('$claude_json') as f: cj = json.load(f)
-with open('$mcp_config') as f: mcp = json.load(f)
-cj['mcpServers'] = mcp.get('mcpServers', {})
-with open('$claude_json', 'w') as f: json.dump(cj, f, indent=2)
-" && info "MCP servers injected into claude.json"
-  fi
-
   # Check if a stopped container with this name already exists.
   if $RUNTIME container exists "$container_name" 2>/dev/null; then
     info "Resuming existing container: $container_name"
     info "Press Ctrl+C or type /exit to quit."
     echo ""
     $RUNTIME start "$container_name"
-    $RUNTIME exec -it "$container_name" claude --dangerously-skip-permissions
+    $RUNTIME exec -it "$container_name" bash -c "stty sane; dbus-run-session -- bash -c 'echo -n | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; exec claude --dangerously-skip-permissions'"
     $RUNTIME stop "$container_name" 2>/dev/null || true
     return
   fi
@@ -348,7 +332,7 @@ with open('$claude_json', 'w') as f: json.dump(cj, f, indent=2)
 
   info "Press Ctrl+C or type /exit to quit."
   echo ""
-  $RUNTIME exec -it "$container_name" claude --dangerously-skip-permissions
+  $RUNTIME exec -it "$container_name" bash -c "stty sane; dbus-run-session -- bash -c 'echo -n | gnome-keyring-daemon --unlock --components=secrets >/dev/null 2>&1; exec claude --dangerously-skip-permissions'"
   $RUNTIME stop "$container_name" 2>/dev/null || true
 }
 
