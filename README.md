@@ -1,4 +1,4 @@
-# claude-dev
+# mosh
 
 Containerized Claude Code environment with Playwright MCP, configured for
 Vertex AI authentication. Works with Podman (preferred) or Docker.
@@ -12,50 +12,43 @@ cd <repo-name>
 
 # 2. Copy and edit the env file
 cp .env.example .env
-# Edit .env: fill in ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION
+# Edit .env — for OAuth (Claude Pro/Max), leave it as-is.
+# For API key or Vertex AI, uncomment and fill in the relevant vars.
 
-# 3. Make sure gcloud credentials exist on host
-gcloud auth application-default login
+# 3. Run first-time setup (builds image, installs mosh to /usr/local/bin)
+bash mosh setup
 
-# 4. Run first-time setup (verifies config, builds image)
-bash claude-dev.sh setup
-
-# 5. Add to PATH (put in ~/.zshrc or ~/.bashrc)
-export PATH="$PATH:/path/to/this/repo"
-# Create a symlink for cleaner invocation
-ln -s claude-dev.sh claude-dev
-
-# 6. Use — just cd to any project and run
+# 4. Use — just cd to any project and run
 cd ~/projects/my-project
-claude-dev
+mosh
 ```
 
 ## Commands
 
 ```
-claude-dev                          Launch (resumes existing container or creates new)
-claude-dev ~/projects/app           Launch with a specific project directory
-claude-dev ~/proj/fe ~/proj/be      Launch with multiple projects mounted
+mosh                          Launch (resumes existing container or creates new)
+mosh ~/projects/app           Launch with a specific project directory
+mosh ~/proj/fe ~/proj/be      Launch with multiple projects mounted
 
-claude-dev setup                    First-time setup
-claude-dev build                    Rebuild the container image
-claude-dev save [tag]               Snapshot container as image (default tag: "backup")
-claude-dev snapshots                List saved snapshots for current project
-claude-dev restore [tag]            Restore container from a saved snapshot
-claude-dev fresh                    Remove container and start clean from base image
-claude-dev help                     Show help
+mosh setup                    First-time setup
+mosh build                    Rebuild the container image
+mosh save [tag]               Snapshot container as image (default tag: "backup")
+mosh snapshots                List saved snapshots for current project
+mosh restore [tag]            Restore container from a saved snapshot
+mosh fresh                    Remove container and start clean from base image
+mosh help                     Show help
 ```
 
 ## Container Persistence
 
 Containers persist between sessions. When you exit Claude Code and later
-re-run `claude-dev` from the same directory, the existing container is
+re-run `mosh` from the same directory, the existing container is
 restarted — any packages installed inside survive across sessions.
 
 Each project gets its own container named `cc-<directory>` (e.g. `cc-my-app`).
 
-Use `claude-dev save` to snapshot the container before risky changes, and
-`claude-dev restore` to roll back if needed.
+Use `mosh save` to snapshot the container before risky changes, and
+`mosh restore` to roll back if needed.
 
 ## Verifying MCP is Connected
 
@@ -87,7 +80,7 @@ You should see the `playwright` server listed as connected.
 |---|---|
 | `Containerfile` | Container image (node:20 + Claude Code + Playwright) |
 | `compose.yaml` | Service definition (reference / podman-compose users) |
-| `claude-dev.sh` | Setup and launcher script |
+| `mosh` | Setup and launcher script |
 | `.env.example` | Template for secrets — copy to `.env` |
 | `config/settings.json` | Container permissions, model, env vars |
 | `config/claude.json` | Baseline user config with MCP servers |

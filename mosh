@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# claude-dev.sh — Setup and launcher for the Claude Code dev container
+# mosh — Setup and launcher for the Claude Code dev container
 # =============================================================================
 #
 # FIRST-TIME SETUP:
-#   bash claude-dev.sh setup
+#   bash /path/to/mosh-pit/mosh setup
 #
 # LAUNCH:
-#   claude-dev                             # mount current directory
-#   claude-dev ~/projects/my-app           # mount a specific project
-#   claude-dev ~/projects/fe ~/projects/be # mount multiple projects
+#   mosh                             # mount current directory
+#   mosh ~/projects/my-app           # mount a specific project
+#   mosh ~/projects/fe ~/projects/be # mount multiple projects
 #
 # REBUILD IMAGE (after Containerfile changes):
-#   claude-dev build
+#   mosh build
 #
 # =============================================================================
 
@@ -21,7 +21,16 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Configuration — override by setting these env vars before running
 # ---------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Resolve SCRIPT_DIR to the real location of this script, following symlinks.
+# This ensures the script works correctly when invoked via /usr/local/bin/claude-dev.
+_src="${BASH_SOURCE[0]}"
+while [[ -L "$_src" ]]; do
+  _dir="$(cd "$(dirname "$_src")" && pwd)"
+  _src="$(readlink "$_src")"
+  [[ "$_src" != /* ]] && _src="$_dir/$_src"
+done
+SCRIPT_DIR="$(cd "$(dirname "$_src")" && pwd)"
 IMAGE_NAME="${CLAUDE_DEV_IMAGE:-claude-dev:latest}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$SCRIPT_DIR/config}"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yaml"
@@ -31,9 +40,9 @@ ENV_FILE="$SCRIPT_DIR/.env"
 # Color output helpers
 # ---------------------------------------------------------------------------
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
-info()    { echo -e "${GREEN}[claude-dev]${NC} $*"; }
-warn()    { echo -e "${YELLOW}[claude-dev]${NC} $*"; }
-error()   { echo -e "${RED}[claude-dev] ERROR:${NC} $*" >&2; }
+info()    { echo -e "${GREEN}[mosh]${NC} $*"; }
+warn()    { echo -e "${YELLOW}[mosh]${NC} $*"; }
+error()   { echo -e "${RED}[mosh] ERROR:${NC} $*" >&2; }
 
 # ---------------------------------------------------------------------------
 # Detect container runtime (podman preferred, docker fallback)
@@ -202,7 +211,22 @@ cmd_setup() {
   # 6. Build the image
   cmd_build
 
-  info "Setup complete! Run '$(basename "$0")' from any project directory to start."
+  # 7. Install the claude-dev command into /usr/local/bin
+  local cmd_target="/usr/local/bin/mosh"
+  local cmd_source="$SCRIPT_DIR/mosh"
+
+  if [[ -L "$cmd_target" && "$(readlink "$cmd_target")" == "$cmd_source" ]]; then
+    info "mosh command already installed at $cmd_target"
+  elif ln -sf "$cmd_source" "$cmd_target" 2>/dev/null; then
+    info "Installed: $cmd_target → $cmd_source"
+  elif sudo ln -sf "$cmd_source" "$cmd_target" 2>/dev/null; then
+    info "Installed (sudo): $cmd_target → $cmd_source"
+  else
+    warn "Could not install mosh to $cmd_target"
+    warn "To install manually: sudo ln -sf \"$cmd_source\" $cmd_target"
+  fi
+
+  info "Setup complete! Run 'mosh' from any project directory to start."
 }
 
 # ---------------------------------------------------------------------------
@@ -352,8 +376,8 @@ cmd_save() {
   info "Saving container '$container_name' as image '$image_tag'..."
   $RUNTIME commit "$container_name" "$image_tag"
   info "Saved."
-  info "List snapshots: claude-dev snapshots"
-  info "Restore:        claude-dev restore $tag"
+  info "List snapshots: mosh snapshots"
+  info "Restore:        mosh restore $tag"
 }
 
 # ---------------------------------------------------------------------------
@@ -470,18 +494,15 @@ Environment variables (set in .env):
   CLAUDE_DEV_IMAGE              Container image name (default: claude-dev:latest)
 
 Example workflow:
-  # One-time setup
-  bash claude-dev.sh setup
+  # One-time setup (also installs the mosh command to /usr/local/bin)
+  bash /path/to/mosh-pit/mosh setup
 
-  # Add to PATH (put in ~/.zshrc or ~/.bashrc)
-  export PATH="\$PATH:$SCRIPT_DIR"
-
-  # Daily use
-  cd ~/projects/my-app && claude-dev
+  # Daily use — run from any project directory
+  cd ~/projects/my-app && mosh
   # or
-  claude-dev ~/projects/my-app
+  mosh ~/projects/my-app
   # or multiple projects
-  claude-dev ~/projects/frontend ~/projects/backend
+  mosh ~/projects/frontend ~/projects/backend
 EOF
 }
 

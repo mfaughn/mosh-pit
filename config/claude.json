@@ -3,10 +3,17 @@
   "autoUpdates": false,
   "mcpServers": {
     "playwright": {
+      "type": "stdio",
       "command": "npx",
       "args": [
-        "@anthropic-ai/mcp-playwright@latest",
+        "-y",
+        "@playwright/mcp@latest",
         "--headless",
+        "--no-sandbox",
+        "--browser",
+        "chromium",
+        "--executable-path",
+        "/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell",
         "--user-data-dir",
         "/tmp/playwright-profile"
       ]
