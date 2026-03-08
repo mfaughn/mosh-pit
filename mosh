@@ -76,7 +76,7 @@ install_plugins() {
     [[ -z "$line" ]] && continue
 
     info "Installing plugin: $line"
-    $RUNTIME exec "$container_name" claude plugin install "$line" || \
+    $RUNTIME exec "$container_name" claude plugin install "$line" --yes || \
       warn "Failed to install plugin: $line"
   done < "$plugin_file"
 }
