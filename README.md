@@ -97,3 +97,20 @@ You should see the `playwright` server listed as connected.
 - **Change model**: edit `config/settings.json` (`"model"` field).
 - **Add slash commands**: add `.md` files to `config/commands/`.
 - **Adjust permissions**: edit `config/settings.json` (`"permissions"` field).
+
+## MCP Servers
+
+MCP servers are defined in `config/mcp.json` and injected into `~/.claude.json`
+inside the container at the start of every session. Claude Code strips `mcpServers`
+from `~/.claude.json` when it exits, so the injection runs on every launch — this
+is intentional and expected.
+
+**MCP servers with credentials** (e.g. `open-brain`) get their keys from `.env`,
+not from `config/mcp.json`. The key is never committed to the repo. If a server's
+key env var is missing from `.env`, that server is omitted silently.
+
+**Setting up on a new machine**: copy `.env.example` to `.env` and fill in any
+credential keys listed in the `MCP server credentials` section. Run `/mcp` inside
+Claude to verify servers are connected.
+
+**To reset MCP state**: just restart mosh — the injection always runs fresh.
