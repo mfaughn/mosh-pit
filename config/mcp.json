@@ -15,6 +15,13 @@
         "--user-data-dir",
         "/tmp/playwright-profile"
       ]
+    },
+    "open-brain": {
+      "type": "http",
+      "url": "https://vnshdtnobscxwuiyprsp.supabase.co/functions/v1/open-brain-mcp",
+      "headers": {
+        "x-brain-key": ""
+      }
     }
   }
 }

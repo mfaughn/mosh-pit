@@ -275,8 +275,11 @@ cmd_launch() {
   local claude_home_vol="${container_name}-claude-home"
 
   # Snippet run inside the container before launching Claude.
-  # Syncs config files from the read-only repo mount (/mosh-config) into the
-  # writable ~/.claude volume. Credentials (.credentials.json) are never touched.
+  # 1. Syncs config files from the read-only repo mount (/mosh-config) into the
+  #    writable ~/.claude volume. Credentials (.credentials.json) are never touched.
+  # 2. Injects MCP server config into ~/.claude.json (which Claude overwrites on
+  #    exit, so we re-inject on every launch). Credentials (e.g. OPENBRAIN_MCP_KEY)
+  #    come from the container environment via --env-file.
   local SYNC_AND_LAUNCH
   SYNC_AND_LAUNCH='
     stty sane
@@ -287,6 +290,36 @@ cmd_launch() {
     for d in agents templates uadf; do
       [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
     done
+    # Inject MCP servers into ~/.claude.json.
+    # Reads config/mcp.json, fills in credential env vars, merges into ~/.claude.json.
+    # Claude Code overwrites ~/.claude.json on exit, stripping mcpServers — this
+    # re-adds them at the start of every session.
+    python3 - <<'"'"'PYEOF'"'"'
+import json, os
+mcp_path = "/mosh-config/mcp.json"
+claude_path = os.path.expanduser("~/.claude.json")
+try:
+    with open(mcp_path) as f:
+        mcp = json.load(f)
+except Exception:
+    mcp = {}
+servers = mcp.get("mcpServers", {})
+# Fill in credentials from environment
+if "open-brain" in servers:
+    key = os.environ.get("OPENBRAIN_MCP_KEY", "")
+    if key:
+        servers["open-brain"]["headers"]["x-brain-key"] = key
+    else:
+        del servers["open-brain"]  # omit if no key configured
+try:
+    with open(claude_path) as f:
+        config = json.load(f)
+except Exception:
+    config = {}
+config["mcpServers"] = servers
+with open(claude_path, "w") as f:
+    json.dump(config, f, indent=2)
+PYEOF
     exec claude --dangerously-skip-permissions
   '
 
