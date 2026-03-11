@@ -17,6 +17,9 @@
 # Symlink (user creates locally)
 claude-dev
 
+# Temporary helper scripts
+fixmosh
+
 # Claude Code runtime data (generated inside config/ during container use)
 config/backups/
 config/cache/

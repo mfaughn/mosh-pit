@@ -93,6 +93,27 @@ install_plugins() {
 }
 
 # ---------------------------------------------------------------------------
+# Common: derive the container name from project directories.
+# Usage:
+#   container_name_from_dirs /abs/path/to/project1 [/abs/path/to/project2 ...]
+#   container_name_from_dirs    # falls back to $(pwd) if no args
+# ---------------------------------------------------------------------------
+container_name_from_dirs() {
+  local dirs=("$@")
+  if [[ ${#dirs[@]} -eq 0 ]]; then
+    dirs=("$(pwd)")
+  fi
+  local parts=()
+  for d in "${dirs[@]}"; do
+    parts+=("$(basename "$d" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')")
+  done
+  # Sort so argument order doesn't matter (hitdev+racktest == racktest+hitdev).
+  local sorted
+  sorted=$(printf '%s\n' "${parts[@]}" | sort | tr '\n' '-' | sed 's/-$//')
+  echo "cc-${sorted}"
+}
+
+# ---------------------------------------------------------------------------
 # Common: verify prerequisites before launching
 # ---------------------------------------------------------------------------
 preflight_check() {
@@ -278,8 +299,11 @@ cmd_launch() {
     resolved+=("$abs")
   done
 
-  # Container name derived from the current working directory.
-  local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
+  # Container name derived from the project directories being mounted.
+  # Single project: cc-<dirname>  (e.g. cc-my-app)
+  # Multiple projects: cc-<dir1>-<dir2>  (e.g. cc-frontend-backend)
+  local container_name
+  container_name=$(container_name_from_dirs "${resolved[@]}")
 
   # Named volume for ~/.claude — persists credentials and state across sessions.
   # Each container gets its own volume so projects don't share OAuth tokens.
@@ -355,6 +379,34 @@ PYEOF
       warn "This container was created by mosh v${container_version} (current: v${MOSH_VERSION})."
       warn "Consider running 'mosh fresh' to pick up the latest configuration."
       warn ""
+    fi
+
+    # Verify the container's /workspace mounts match what was requested.
+    # Build the list of expected workspace mount destinations.
+    local expected_mounts=()
+    if [[ ${#resolved[@]} -eq 1 ]]; then
+      expected_mounts+=("/workspace")
+    else
+      for p in "${resolved[@]}"; do
+        expected_mounts+=("/workspace/$(basename "$p")")
+      done
+    fi
+
+    # Get actual workspace mounts from the container.
+    local actual_mounts
+    actual_mounts=$($RUNTIME inspect "$container_name" \
+      --format '{{range .Mounts}}{{.Destination}}{{"\n"}}{{end}}' 2>/dev/null \
+      | grep -E '^/workspace(/|$)' | sort)
+    local expected_sorted
+    expected_sorted=$(printf '%s\n' "${expected_mounts[@]}" | sort)
+
+    if [[ "$actual_mounts" != "$expected_sorted" ]]; then
+      error "Container '$container_name' exists but has different project mounts."
+      error "  Requested: $(printf '%s\n' "${expected_mounts[@]}")"
+      error "  Container: ${actual_mounts:-"(none)"}"
+      error ""
+      error "Run 'mosh fresh $(printf '%s ' "$@")' to recreate with the new mounts."
+      return 1
     fi
 
     info "Resuming existing container: $container_name"
@@ -434,7 +486,8 @@ PYEOF
 #   claude-dev save my-tag       # saves cc-<cwd> as cc-<cwd>:my-tag
 # ---------------------------------------------------------------------------
 cmd_save() {
-  local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
+  local container_name
+  container_name=$(container_name_from_dirs)
   local tag="${1:-backup}"
   local image_tag="$container_name:$tag"
 
@@ -455,7 +508,8 @@ cmd_save() {
 # snapshots: list saved snapshots for the current project
 # ---------------------------------------------------------------------------
 cmd_snapshots() {
-  local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
+  local container_name
+  container_name=$(container_name_from_dirs)
   info "Saved snapshots for $container_name:"
   $RUNTIME images --format "table {{.Repository}}:{{.Tag}}  {{.CreatedSince}}  {{.Size}}" \
     | grep "^$container_name:" || echo "  (none)"
@@ -469,7 +523,8 @@ cmd_snapshots() {
 #   claude-dev restore my-tag     # restore from cc-<cwd>:my-tag
 # ---------------------------------------------------------------------------
 cmd_restore() {
-  local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
+  local container_name
+  container_name=$(container_name_from_dirs)
   local tag="${1:-backup}"
   local image_tag="$container_name:$tag"
 
@@ -496,7 +551,8 @@ cmd_restore() {
 # provision: run the provision script against an existing container
 # ---------------------------------------------------------------------------
 cmd_provision() {
-  local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
+  local container_name
+  container_name=$(container_name_from_dirs)
   local provision_script="$(pwd)/.claude-dev/provision.sh"
 
   if [[ ! -f "$provision_script" ]]; then
@@ -522,14 +578,30 @@ cmd_provision() {
 # fresh: remove existing container and start clean from base image
 # ---------------------------------------------------------------------------
 cmd_fresh() {
-  local container_name="cc-$(basename "$(pwd)" | tr -cs 'a-zA-Z0-9_-' '-' | sed 's/-$//')"
+  # Resolve project paths the same way cmd_launch does, so we compute
+  # the same container name that cmd_launch will look for.
+  local projects=("$@")
+  if [[ ${#projects[@]} -eq 0 ]]; then
+    projects=("$(pwd)")
+  fi
+  local resolved=()
+  for p in "${projects[@]}"; do
+    local abs
+    abs="$(cd "$p" 2>/dev/null && pwd)" || {
+      error "Directory not found: $p"
+      exit 1
+    }
+    resolved+=("$abs")
+  done
+
+  local container_name
+  container_name=$(container_name_from_dirs "${resolved[@]}")
 
   if $RUNTIME container exists "$container_name" 2>/dev/null; then
     info "Removing existing container: $container_name"
     $RUNTIME rm -f "$container_name"
   fi
 
-  # Shift off the "fresh" argument, pass remaining args to launch
   cmd_launch "$@"
 }
 
