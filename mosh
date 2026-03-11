@@ -468,6 +468,9 @@ PYEOF
     # getcwd(), which fails with ENOENT because the directory inode is gone.
     #
     # How it works:
+    #   - `set -T` (functrace) propagates the DEBUG trap into sourced scripts.
+    #     Without this, the trap only fires once before `source` itself, not
+    #     before each command inside the sourced script.
     #   - The DEBUG trap fires before every command in the sourced script.
     #   - `pwd -P` resolves the real path; it fails if the dir was deleted.
     #   - On failure, `cd /workspace` silently restores a valid cwd.
@@ -480,13 +483,14 @@ PYEOF
     #     Errno::ENOENT - No such file or directory - getcwd
     #   The same can happen with any language/tool that builds in a temp dir.
     #
-    # If you're modifying this: the trap must stay on the `source` invocation
-    # (not a direct `bash <script>`) so it applies to every command inside the
-    # provision script, not just the script invocation itself.
+    # If you're modifying this: all three pieces are required:
+    #   - `set -T` — without it, the trap doesn't fire inside the sourced script
+    #   - `source` (not `bash <script>`) — keeps everything in one shell process
+    #   - `pwd -P` (not `cd .`) — `cd .` succeeds on Linux even for deleted dirs
     if [[ -f "$provision_script" ]]; then
       info "Running provision script..."
       $RUNTIME exec --workdir /workspace --user root "$container_name" \
-        bash -c 'trap '\''pwd -P >/dev/null 2>&1 || cd /workspace 2>/dev/null'\'' DEBUG; source /workspace/.claude-dev/provision.sh'
+        bash -c 'set -T; trap '\''pwd -P >/dev/null 2>&1 || cd /workspace 2>/dev/null'\'' DEBUG; source /workspace/.claude-dev/provision.sh'
     fi
 
     # Install plugins from default list and per-project list.
