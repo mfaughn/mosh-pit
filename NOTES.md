@@ -165,6 +165,126 @@ container, these map to:
 - `config/settings.json` → `/home/claude/.claude/settings.json`
 - `config/claude.json` → `/home/claude/.claude.json`
 
+### Idle Session Hang — FUSE Stall (2026-03-10)
+
+**Symptom**: Claude Code session left idle for ~3 days becomes completely
+unresponsive. The process is alive (sleeping), the terminal is writable, but
+Claude Code does not process input. No error message, no crash — just silent
+refusal to respond.
+
+**This is a different failure mode than the zombie accumulation** documented in
+`tini-fix-brief.md`. Tini was running correctly as PID 1, and only 2 zombie
+processes existed (harmless git processes from a separate session).
+
+**What we observed (diagnostic session)**:
+
+1. `ps aux`: Claude Code (PID 2) alive, state `Sl+` (sleeping, multi-threaded),
+   0.1% CPU, 249MB RSS. Tini running as PID 1. Playwright MCP servers alive and
+   idle. Only 2 zombies (git, from a second Claude session on pts/1).
+
+2. `cat /proc/2/wchan`: `request_wait_answer` — a FUSE filesystem wait. The
+   process was blocked waiting for the `fuse-overlayfs` daemon (inside the
+   Podman Linux VM) to respond to a filesystem operation.
+
+3. `cat /proc/2/net/tcp`: Empty — zero TCP connections. Not a stale network
+   socket or expired API connection.
+
+4. `echo "test" > /proc/2/fd/1`: Succeeded — the terminal (pts/0) was writable.
+   The pty itself was not the bottleneck.
+
+5. File descriptors: Two deleted files held open:
+   - fd 22 → `~/.claude.json (deleted)`
+   - fd 23 → `~/.claude/backups/.claude.json.backup... (deleted)`
+   These are expected (Claude Code rewrites `.claude.json`), but if it tries to
+   re-read the paths after deletion and the FUSE layer stalls, it blocks.
+
+6. Thread-level check (second pass):
+   - Main thread (TID 2): wchan `0`, syscall `running` — no longer in FUSE wait
+   - Thread 3: `ep_poll` — Node.js event loop idle, waiting for events
+   - All other threads: `futex_wait_queue` — worker threads idle
+   Combined with 0.1% CPU and zero TCP connections, the process was alive but
+   completely inert — not making API calls, not reading files, not doing anything.
+
+**Likely cause**: After 3 days of macOS sleep/wake cycles, the Podman Linux VM's
+FUSE overlay layer (`fuse-overlayfs`) did not fully recover. When Claude Code
+tried to perform a filesystem operation (possibly triggered by user input after
+the idle period), it blocked in `request_wait_answer`. The operation may have
+eventually timed out internally, leaving Claude Code in a broken state where the
+event loop was idle but not processing stdin.
+
+**What we could NOT confirm** (container runs as non-root `claude` user):
+- `/proc/2/stack` — permission denied
+- `strace -p 2` — strace not installed, `apt-get` requires root
+- Exact file path that triggered the FUSE stall
+
+**Possible mitigations** (not yet implemented):
+- Application-level heartbeat/keepalive that detects when the session is stale
+- Periodic health check script that tests filesystem responsiveness inside the
+  container and alerts or restarts if stuck
+- Investigating Podman VM settings for FUSE timeout behavior after sleep/wake
+- Adding strace to the container image for future diagnostics
+- A watchdog process that monitors Claude Code's responsiveness
+
+### Shared Bind Mount Cross-Contamination (2026-03-10)
+
+**Symptom**: `~/.claude/projects/-workspace/` inside one container contained
+session data from a completely different project running in a separate container.
+
+**Root cause**: Containers created before the named volume migration (see "OAuth
+Token Persistence" above) still use the old bind mount configuration:
+
+```
+/Users/mrf/projects/safeClaude/config -> /home/claude/.claude (bind)
+```
+
+Multiple containers (`cc-ezfhir`, `cc-drivetrain`, `cc-v2ig`) all bind-mount
+the **same host directory** as `~/.claude/`. Since every container mounts its
+project at `/workspace`, Claude Code's per-project state directory is always
+`~/.claude/projects/-workspace/` — the same path in every container. All
+containers read and write the same session files simultaneously.
+
+**Confirmed by inspection**:
+
+```
+# cc-ezfhir mounts:
+/Users/mrf/projects/safeClaude/config -> /home/claude/.claude (bind)
+/Users/mrf/projects/ezfhir -> /workspace (bind)
+
+# cc-drivetrain mounts:
+/Users/mrf/projects/safeClaude/config -> /home/claude/.claude (bind)
+/Users/mrf/projects/drivetrain -> /workspace (bind)
+```
+
+Same source directory for `~/.claude/`, different project at `/workspace`.
+Only `cc-mosh-pit` had the named volume (`cc-mosh-pit-claude-home`).
+
+**Why it persisted**: The `mosh` script's `cmd_launch` checks for an existing
+container and resumes it (line 327–334) without recreating mounts. Containers
+created before the named volume fix were never upgraded — they kept their old
+bind mount configuration indefinitely.
+
+**Additional concern**: The project was previously named `safeClaude`. Old
+containers still reference `/Users/mrf/projects/safeClaude/config` as their
+bind mount source. If that directory is renamed or removed, those containers
+lose their `~/.claude/` entirely.
+
+**The fix**: Recreate affected containers with `mosh fresh` so they pick up
+the named volume mounts:
+
+```bash
+cd ~/projects/ezfhir && mosh fresh
+cd ~/projects/drivetrain && mosh fresh
+cd ~/projects/v2ig && mosh fresh     # if still running
+```
+
+Each will get its own named volume (`cc-ezfhir-claude-home`, etc.) with
+isolated per-project state. Credentials will need re-authentication.
+
+**Preventive measure to consider**: The `mosh` script could detect old
+bind-mounted containers on resume and warn the user to run `mosh fresh`, or
+automatically migrate them. Currently it silently resumes with whatever mount
+configuration the container was originally created with.
+
 ## File Inventory
 
 | File/Dir | Purpose | Committed? |

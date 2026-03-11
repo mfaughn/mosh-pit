@@ -36,6 +36,17 @@ CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$SCRIPT_DIR/config}"
 COMPOSE_FILE="$SCRIPT_DIR/compose.yaml"
 ENV_FILE="$SCRIPT_DIR/.env"
 
+# Version tracking — used to detect stale containers on resume.
+#   MOSH_VERSION:        Increment on every meaningful change to container setup.
+#   MOSH_MIN_COMPAT:     Increment when a change is breaking (e.g., mount layout).
+#                        Containers below this version will be blocked, not just warned.
+#
+# History:
+#   1 — Initial versioned release. Named volumes for ~/.claude, tini as PID 1.
+#       Min compat 1: containers without named volumes (bind mount era) are blocked.
+MOSH_VERSION=1
+MOSH_MIN_COMPAT=1
+
 # ---------------------------------------------------------------------------
 # Color output helpers
 # ---------------------------------------------------------------------------
@@ -325,6 +336,27 @@ PYEOF
 
   # Check if a stopped container with this name already exists.
   if $RUNTIME container exists "$container_name" 2>/dev/null; then
+    # Check the container's mosh version label against the current script.
+    local container_version
+    container_version=$($RUNTIME inspect "$container_name" \
+      --format '{{index .Config.Labels "mosh.version"}}' 2>/dev/null || echo "")
+
+    # Containers created before version labeling have no label (empty string).
+    # Treat them as version 0.
+    container_version="${container_version:-0}"
+
+    if [[ "$container_version" -lt "$MOSH_MIN_COMPAT" ]]; then
+      error "This container was created by an incompatible version of mosh (v${container_version})."
+      error "Current version is v${MOSH_VERSION} (minimum compatible: v${MOSH_MIN_COMPAT})."
+      error ""
+      error "Run 'mosh fresh' to recreate it with the current configuration."
+      return 1
+    elif [[ "$container_version" -lt "$MOSH_VERSION" ]]; then
+      warn "This container was created by mosh v${container_version} (current: v${MOSH_VERSION})."
+      warn "Consider running 'mosh fresh' to pick up the latest configuration."
+      warn ""
+    fi
+
     info "Resuming existing container: $container_name"
     info "Press Ctrl+C or type /exit to quit."
     echo ""
@@ -337,6 +369,7 @@ PYEOF
   # No existing container — create a new one.
   build_common_args
   COMMON_ARGS+=(--name "$container_name")
+  COMMON_ARGS+=(--label "mosh.version=$MOSH_VERSION")
   # Named volume for ~/.claude provides a writable home for credentials and state.
   COMMON_ARGS+=(--mount "type=volume,source=${claude_home_vol},target=/home/claude/.claude")
   info "Container: $container_name (new)"
