@@ -460,9 +460,33 @@ PYEOF
 
   if [[ "$needs_setup" == true ]]; then
     # Run provision script (system packages) as root.
+    #
+    # STALE-CWD GUARD: The DEBUG trap below protects against a class of bug
+    # where a provision step compiles something in a temp directory, cleans it
+    # up, and leaves the shell's cwd pointing at a deleted path. Subsequent
+    # commands (e.g. `gem install`, `pip install`) spawn subprocesses that call
+    # getcwd(), which fails with ENOENT because the directory inode is gone.
+    #
+    # How it works:
+    #   - The DEBUG trap fires before every command in the sourced script.
+    #   - `pwd -P` resolves the real path; it fails if the dir was deleted.
+    #   - On failure, `cd /workspace` silently restores a valid cwd.
+    #   - When the cwd is fine (the common case), cost is one syscall — negligible.
+    #
+    # Example of the problem this solves:
+    #   A provision script compiles Ruby from source in /tmp/ruby-build-xxx,
+    #   then `rm -rf`s that dir. The next line runs `gem install bundler`.
+    #   Ruby's threaded gem fetcher calls getcwd() in each thread and crashes:
+    #     Errno::ENOENT - No such file or directory - getcwd
+    #   The same can happen with any language/tool that builds in a temp dir.
+    #
+    # If you're modifying this: the trap must stay on the `source` invocation
+    # (not a direct `bash <script>`) so it applies to every command inside the
+    # provision script, not just the script invocation itself.
     if [[ -f "$provision_script" ]]; then
       info "Running provision script..."
-      $RUNTIME exec --user root "$container_name" bash /workspace/.claude-dev/provision.sh
+      $RUNTIME exec --workdir /workspace --user root "$container_name" \
+        bash -c 'trap '\''pwd -P >/dev/null 2>&1 || cd /workspace 2>/dev/null'\'' DEBUG; source /workspace/.claude-dev/provision.sh'
     fi
 
     # Install plugins from default list and per-project list.
