@@ -187,9 +187,10 @@ cmd_setup() {
   if [[ ! -f "$ENV_FILE" ]]; then
     if [[ -f "$SCRIPT_DIR/.env.example" ]]; then
       cp "$SCRIPT_DIR/.env.example" "$ENV_FILE"
-      warn ".env created from .env.example — please edit it now:"
+      warn ".env created from .env.example."
       warn "  $ENV_FILE"
-      warn "Set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID, then re-run setup."
+      warn "OAuth users (Claude Pro/Max): leave the keys commented out and re-run setup."
+      warn "API key users: set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID, then re-run setup."
       exit 0
     else
       error ".env.example not found alongside this script. Cannot continue."
@@ -634,6 +635,48 @@ cmd_fresh() {
 }
 
 # ---------------------------------------------------------------------------
+# update: update Claude Code inside an existing container without launching it
+# ---------------------------------------------------------------------------
+cmd_update() {
+  local projects=("$@")
+  if [[ ${#projects[@]} -eq 0 ]]; then
+    projects=("$(pwd)")
+  fi
+  local resolved=()
+  for p in "${projects[@]}"; do
+    local abs
+    abs="$(cd "$p" 2>/dev/null && pwd)" || {
+      error "Directory not found: $p"
+      exit 1
+    }
+    resolved+=("$abs")
+  done
+
+  local container_name
+  container_name=$(container_name_from_dirs "${resolved[@]}")
+
+  if ! $RUNTIME container exists "$container_name" 2>/dev/null; then
+    error "No container found: $container_name"
+    error "Start mosh from this project directory first to create one."
+    exit 1
+  fi
+
+  info "Starting container: $container_name"
+  $RUNTIME start "$container_name"
+
+  info "Updating Claude Code..."
+  $RUNTIME exec --user root "$container_name" npm install -g @anthropic-ai/claude-code@latest
+
+  # Show the new version
+  local new_version
+  new_version=$($RUNTIME exec "$container_name" claude --version 2>/dev/null || echo "unknown")
+  info "Claude Code updated to: $new_version"
+
+  $RUNTIME stop "$container_name" 2>/dev/null || true
+  info "Container stopped. Run 'mosh' to launch with the updated version."
+}
+
+# ---------------------------------------------------------------------------
 # help
 # ---------------------------------------------------------------------------
 cmd_help() {
@@ -649,6 +692,7 @@ Commands:
   restore   Replace current container with a saved snapshot
   fresh     Remove existing container and start clean from base image
   provision Re-run config/provision.sh in the project's container
+  update    Update Claude Code (npm) inside existing container without launching
   help      Show this help
 
 Launch modes:
@@ -688,6 +732,7 @@ case "${1:-}" in
   restore)        shift; cmd_restore "$@" ;;
   fresh)          shift; cmd_fresh "$@" ;;
   provision)      cmd_provision ;;
+  update)         shift; cmd_update "$@" ;;
   help|-h|--help) cmd_help ;;
   "")             cmd_launch ;;
   *)
