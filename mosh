@@ -146,6 +146,7 @@ build_common_args() {
     --env-file "$ENV_FILE"
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     -e NO_UPDATE_NOTIFIER=1
+    -e TERM=xterm-256color  # TODO: remove after image rebuild (baked into Containerfile)
     # Repo config is mounted read-only at /mosh-config; synced into ~/.claude at launch.
     # ~/.claude itself lives in a named Podman volume so Claude Code can write to it
     # (e.g., .credentials.json for OAuth token storage).

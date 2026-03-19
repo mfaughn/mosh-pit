@@ -53,6 +53,7 @@ RUN pip3 install --break-system-packages playwright
 # so the browser version matches what the MCP server expects.
 # ---------------------------------------------------------------------------
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV TERM=xterm-256color
 RUN npm install -g @playwright/mcp@latest
 
 # Install Chromium for both the MCP server and the Python playwright package.
