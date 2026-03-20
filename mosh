@@ -363,8 +363,7 @@ PYEOF
     # This only touches ~/.gitconfig (in the named volume) — host repos are
     # never modified.
     if [ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
-      git config --global credential.helper \
-        "!f() { echo username=x-access-token; echo password=\$GITHUB_PERSONAL_ACCESS_TOKEN; }; f"
+      git config --global credential.helper "$HOME/.git-credential-helper"
       git config --global url."https://github.com/".insteadOf "git@github.com:"
     fi
     exec claude --dangerously-skip-permissions

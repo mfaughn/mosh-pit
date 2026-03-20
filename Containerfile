@@ -74,6 +74,10 @@ RUN useradd -m -s /bin/bash claude && \
 
 USER claude
 
+# Git credential helper for GitHub token auth (used by mosh launcher).
+# Reads the token from the environment at invocation time — nothing on disk.
+COPY --chown=claude:claude config/git-credential-helper /home/claude/.git-credential-helper
+
 WORKDIR /workspace
 
 # ---------------------------------------------------------------------------
