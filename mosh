@@ -357,6 +357,16 @@ config["mcpServers"] = servers
 with open(claude_path, "w") as f:
     json.dump(config, f, indent=2)
 PYEOF
+    # Configure git to authenticate with GitHub over HTTPS using a personal
+    # access token. Also rewrite SSH remote URLs to HTTPS so cloned repos
+    # that use git@github.com: work without SSH keys in the container.
+    # This only touches ~/.gitconfig (in the named volume) — host repos are
+    # never modified.
+    if [ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
+      git config --global credential.helper \
+        "!f() { echo username=x-access-token; echo password=\$GITHUB_PERSONAL_ACCESS_TOKEN; }; f"
+      git config --global url."https://github.com/".insteadOf "git@github.com:"
+    fi
     exec claude --dangerously-skip-permissions
   '
 
