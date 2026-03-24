@@ -383,7 +383,7 @@ PYEOF
       echo ""
       echo -e "\033[0;31m[mosh] ERROR:\033[0m Session resume failed (exit code $CLAUDE_EXIT)."
       echo -e "\033[0;31m[mosh]\033[0m The saved session may be expired or corrupted."
-      echo -e "\033[0;31m[mosh]\033[0m Run '\033[1;33mmosh new\033[0;31m' to start a fresh session.\033[0m"
+      echo -e "\033[0;31m[mosh]\033[0m Run \033[1;33mmosh new\033[0m to start a fresh session."
       rm -f "$RESUME_FILE"
     fi
     # Save session ID for next resume
