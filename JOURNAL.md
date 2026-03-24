@@ -62,3 +62,32 @@
 - Session IDs are stored per-project automatically because each project container has its own named volume for `~/.claude/`. No explicit per-project keying is needed.
 - The `--resume` flag reopens the exact same conversation with full history. This is different from `--continue` which starts a new conversation with context from the prior one.
 - Worktree support is documented in ROADMAP.md but not yet implemented. Separate containers per worktree is the recommended approach.
+
+## Session Handoff — 2026-03-24 12:30
+
+### Completed This Session
+
+- **Fixed broken quoting that prevented `mosh` from launching**: A single-quoted `echo` string on line 386 (inside the `SYNC_AND_LAUNCH` heredoc) contained literal single quotes that broke the outer `SYNC_AND_LAUNCH='...'` quoting. The host shell tried to execute `\033[1;33mmosh` as a command, producing `33mmosh: command not found`. Fix: removed the single quotes from the echo statement. Commit: `6fe329a`.
+
+- **Pass ANTHROPIC_MODEL from host into container**: `ANTHROPIC_MODEL` (set in `~/.zshenv` on the host) was not being forwarded into containers, so Claude Code inside mosh sessions used the default model instead of the user's preferred `claude-opus-4-6@default[1m]`. Added conditional `-e ANTHROPIC_MODEL=...` to `COMMON_ARGS` in `build_common_args()`. Commit: `21201e4`.
+
+- **Pushed all unpushed commits**: Three commits that were ahead of origin (`c5212cc`, `d261dbe`, and the two new fixes) are now pushed.
+
+### Current State
+- Branch: `main`
+- Last checkpoint: `21201e4` — Pass ANTHROPIC_MODEL from host environment into container
+- Tests: N/A (no test suite)
+- All changes pushed to remote
+
+### Next Steps
+1. Carry-forward: remove `TERM=xterm-256color` TODO line in mosh after image rebuild
+2. Carry-forward: delete obsolete `HANDOFF.md` and `SESSION-HANDOFF.md`
+3. Carry-forward: UADF command naming redundancy (`/uadf:uadf-init`)
+4. Consider whether other host env vars should also be passed through (e.g., `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`)
+
+### Open Questions / Blockers
+- None
+
+### Relevant Context
+- The quoting bug was introduced in commit `d261dbe` (session auto-resume). Any time code is added inside the `SYNC_AND_LAUNCH='...'` single-quoted block, single quotes must use the `'"'"'` escape pattern or be avoided entirely.
+- `--env-file` does not expand shell variables or handle bare variable names when the file is also `source`d by bash (line 138), so passing host env vars requires explicit `-e` flags in COMMON_ARGS.
