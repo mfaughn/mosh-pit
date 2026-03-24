@@ -366,7 +366,31 @@ PYEOF
       git config --global credential.helper "$HOME/.git-credential-helper"
       git config --global url."https://github.com/".insteadOf "git@github.com:"
     fi
-    exec claude --dangerously-skip-permissions
+    # Resume last session if available (unless MOSH_NEW_SESSION is set)
+    RESUME_FILE="$HOME/.claude/last-session-id"
+    CLAUDE_ARGS="--dangerously-skip-permissions"
+    if [ "${MOSH_NEW_SESSION:-0}" != "1" ] && [ -f "$RESUME_FILE" ]; then
+      SESSION_ID=$(cat "$RESUME_FILE")
+      if [ -n "$SESSION_ID" ]; then
+        CLAUDE_ARGS="$CLAUDE_ARGS --resume $SESSION_ID"
+        echo -e "\033[0;32m[mosh]\033[0m Resuming session: $SESSION_ID"
+      fi
+    fi
+    claude $CLAUDE_ARGS
+    CLAUDE_EXIT=$?
+    # If resume failed, tell the user
+    if [ $CLAUDE_EXIT -ne 0 ] && echo "$CLAUDE_ARGS" | grep -q -- "--resume"; then
+      echo ""
+      echo -e "\033[0;31m[mosh] ERROR:\033[0m Session resume failed (exit code $CLAUDE_EXIT)."
+      echo -e "\033[0;31m[mosh]\033[0m The saved session may be expired or corrupted."
+      echo -e "\033[0;31m[mosh]\033[0m Run '\033[1;33mmosh new\033[0;31m' to start a fresh session.\033[0m"
+      rm -f "$RESUME_FILE"
+    fi
+    # Save session ID for next resume
+    NEWEST=$(ls -t "$HOME/.claude/projects/-workspace/"*.jsonl 2>/dev/null | head -1)
+    if [ -n "${NEWEST:-}" ]; then
+      basename "$NEWEST" .jsonl > "$RESUME_FILE"
+    fi
   '
 
   # Check if a stopped container with this name already exists.
@@ -424,7 +448,7 @@ PYEOF
     info "Press Ctrl+C or type /exit to quit."
     echo ""
     $RUNTIME start "$container_name"
-    $RUNTIME exec -it "$container_name" bash -c "$SYNC_AND_LAUNCH"
+    $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash -c "$SYNC_AND_LAUNCH"
     $RUNTIME stop "$container_name" 2>/dev/null || true
     return
   fi
@@ -513,7 +537,7 @@ PYEOF
 
   info "Press Ctrl+C or type /exit to quit."
   echo ""
-  $RUNTIME exec -it "$container_name" bash -c "$SYNC_AND_LAUNCH"
+  $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash -c "$SYNC_AND_LAUNCH"
   $RUNTIME stop "$container_name" 2>/dev/null || true
 }
 
@@ -694,7 +718,8 @@ cmd_help() {
 Usage: $(basename "$0") [command] [project-path ...]
 
 Commands:
-  (none)    Launch Claude Code (resumes existing container or creates new)
+  (none)    Launch Claude Code (resumes last session and container)
+  new       Start a fresh session (skip session resume)
   setup     First-time setup: create .env, verify config, build image
   build     (Re)build the container image
   save      Snapshot the project's container as an image (backup)
@@ -743,6 +768,7 @@ case "${1:-}" in
   fresh)          shift; cmd_fresh "$@" ;;
   provision)      cmd_provision ;;
   update)         shift; cmd_update "$@" ;;
+  new)            shift; MOSH_NEW_SESSION=1 cmd_launch "$@" ;;
   help|-h|--help) cmd_help ;;
   "")             cmd_launch ;;
   *)

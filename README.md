@@ -26,7 +26,8 @@ mosh
 ## Commands
 
 ```
-mosh                          Launch (resumes existing container or creates new)
+mosh                          Launch (resumes last session and container)
+mosh new                      Start a fresh session (skip session resume)
 mosh ~/projects/app           Launch with a specific project directory
 mosh ~/proj/fe ~/proj/be      Launch with multiple projects mounted
 
