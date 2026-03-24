@@ -176,6 +176,11 @@ build_common_args() {
     # OAuth mode: Claude Code handles auth via browser login
     info "Auth: OAuth (Claude Pro/Max)"
   fi
+
+  # Pass through model selection from host environment (e.g., from ~/.zshenv)
+  if [[ -n "${ANTHROPIC_MODEL:-}" ]]; then
+    COMMON_ARGS+=(-e "ANTHROPIC_MODEL=${ANTHROPIC_MODEL}")
+  fi
 }
 
 # ---------------------------------------------------------------------------
