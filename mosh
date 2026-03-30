@@ -134,8 +134,28 @@ preflight_check() {
 # Sets the global COMMON_ARGS array.
 # ---------------------------------------------------------------------------
 build_common_args() {
-  # Source .env to detect auth mode
+  # Source .env to detect auth mode and expand $VAR references using the
+  # host environment (e.g., $GITHUB_TOKEN from ~/.zshenv).
   set -a; source "$ENV_FILE"; set +a
+
+  # Generate a resolved .env file where all $VAR references are expanded.
+  # Podman's --env-file reads values literally (no shell expansion), so we
+  # produce a temp file with the actual values. Only variables listed in
+  # the mosh-pit .env are included — the full host environment is not leaked.
+  RESOLVED_ENV_FILE=$(mktemp)
+  while IFS= read -r line; do
+    # Skip comments and blank lines
+    [[ "$line" =~ ^[[:space:]]*# ]] && continue
+    [[ -z "${line// }" ]] && continue
+    # Extract the variable name (everything before the first =)
+    local var_name="${line%%=*}"
+    [[ -z "$var_name" ]] && continue
+    # Look up the resolved value from the current shell environment
+    local resolved_value="${!var_name:-}"
+    if [[ -n "$resolved_value" ]]; then
+      echo "${var_name}=${resolved_value}" >> "$RESOLVED_ENV_FILE"
+    fi
+  done < "$ENV_FILE"
 
   # Host directories shared between host and container so skills and plugins
   # only need to be maintained in one place (~/.claude/).
@@ -143,7 +163,7 @@ build_common_args() {
 
   COMMON_ARGS=(
     --shm-size=256m
-    --env-file "$ENV_FILE"
+    --env-file "$RESOLVED_ENV_FILE"
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     -e NO_UPDATE_NOTIFIER=1
     -e TERM=xterm-256color  # TODO: remove after image rebuild (baked into Containerfile)
@@ -558,6 +578,7 @@ PYEOF
   echo ""
   $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash -c "$SYNC_AND_LAUNCH"
   $RUNTIME stop "$container_name" 2>/dev/null || true
+  rm -f "${RESOLVED_ENV_FILE:-}"
 }
 
 # ---------------------------------------------------------------------------
