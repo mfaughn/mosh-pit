@@ -485,14 +485,14 @@ PYEOF
   fi
 
   # Check if provisioning or plugin installation is needed.
-  local provision_script="${resolved[0]}/.claude-dev/provision.sh"
   local default_plugins="$SCRIPT_DIR/config/default-plugins.txt"
-  local project_plugins="${resolved[0]}/.claude-dev/plugins.txt"
   local needs_setup=false
 
-  [[ -f "$provision_script" ]] && needs_setup=true
   [[ -f "$default_plugins" ]] && needs_setup=true
-  [[ -f "$project_plugins" ]] && needs_setup=true
+  for project_dir in "${resolved[@]}"; do
+    [[ -f "$project_dir/.claude-dev/provision.sh" ]] && needs_setup=true
+    [[ -f "$project_dir/.claude-dev/plugins.txt" ]] && needs_setup=true
+  done
 
   # Run the container as a persistent daemon (sleep infinity) so we can
   # always attach via `exec -it`. This avoids TTY issues with `podman start -ai`
@@ -500,7 +500,7 @@ PYEOF
   $RUNTIME run -d "${COMMON_ARGS[@]}" "$IMAGE_NAME" sleep infinity
 
   if [[ "$needs_setup" == true ]]; then
-    # Run provision script (system packages) as root.
+    # Run provision scripts (system packages) as root.
     #
     # STALE-CWD GUARD: The DEBUG trap below protects against a class of bug
     # where a provision step compiles something in a temp directory, cleans it
@@ -528,15 +528,28 @@ PYEOF
     #   - `set -T` — without it, the trap doesn't fire inside the sourced script
     #   - `source` (not `bash <script>`) — keeps everything in one shell process
     #   - `pwd -P` (not `cd .`) — `cd .` succeeds on Linux even for deleted dirs
-    if [[ -f "$provision_script" ]]; then
-      info "Running provision script..."
-      $RUNTIME exec --workdir /workspace --user root "$container_name" \
-        bash -c 'set -T; trap '\''pwd -P >/dev/null 2>&1 || cd /workspace 2>/dev/null'\'' DEBUG; source /workspace/.claude-dev/provision.sh'
-    fi
+    for project_dir in "${resolved[@]}"; do
+      # Compute the container-side path for this project.
+      # Single project: /workspace  |  Multi-project: /workspace/<dirname>
+      local container_path
+      if [[ ${#resolved[@]} -eq 1 ]]; then
+        container_path="/workspace"
+      else
+        container_path="/workspace/$(basename "$project_dir")"
+      fi
 
-    # Install plugins from default list and per-project list.
+      if [[ -f "$project_dir/.claude-dev/provision.sh" ]]; then
+        info "Running provision script for $(basename "$project_dir")..."
+        $RUNTIME exec --workdir "$container_path" --user root "$container_name" \
+          bash -c 'set -T; trap '\''pwd -P >/dev/null 2>&1 || cd /workspace 2>/dev/null'\'' DEBUG; source '"$container_path"'/.claude-dev/provision.sh'
+      fi
+    done
+
+    # Install plugins from default list and per-project lists.
     install_plugins "$container_name" "$default_plugins"
-    install_plugins "$container_name" "$project_plugins"
+    for project_dir in "${resolved[@]}"; do
+      install_plugins "$container_name" "$project_dir/.claude-dev/plugins.txt"
+    done
 
     info "Setup complete."
   fi
