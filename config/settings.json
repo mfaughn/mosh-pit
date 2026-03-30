@@ -29,5 +29,9 @@
     "frontend-design@claude-plugins-official": true
   },
   "skipDangerousModePermissionPrompt": true,
-  "effortLevel": "high"
+  "effortLevel": "high",
+  "statusLine": {
+    "type": "command",
+    "command": "/home/claude/.claude/statusline.sh"
+  }
 }

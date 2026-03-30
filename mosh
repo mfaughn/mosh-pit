@@ -326,9 +326,10 @@ cmd_launch() {
   SYNC_AND_LAUNCH='
     stty sane
     mkdir -p ~/.claude
-    for f in settings.json CLAUDE.md mcp.json; do
+    for f in settings.json CLAUDE.md mcp.json statusline.sh; do
       [ -f "/mosh-config/$f" ] && cp "/mosh-config/$f" "$HOME/.claude/$f" 2>/dev/null || true
     done
+    [ -f "$HOME/.claude/statusline.sh" ] && chmod +x "$HOME/.claude/statusline.sh"
     for d in agents templates uadf; do
       [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
     done
