@@ -87,7 +87,7 @@ install_plugins() {
     [[ -z "$line" ]] && continue
 
     info "Installing plugin: $line"
-    $RUNTIME exec "$container_name" claude plugin install "$line" --yes || \
+    $RUNTIME exec "$container_name" claude plugin install "$line" || \
       warn "Failed to install plugin: $line"
   done < "$plugin_file"
 }
@@ -504,75 +504,75 @@ PYEOF
     done
   fi
 
-  # Check if provisioning or plugin installation is needed.
-  local default_plugins="$SCRIPT_DIR/config/default-plugins.txt"
-  local needs_setup=false
-
-  [[ -f "$default_plugins" ]] && needs_setup=true
-  for project_dir in "${resolved[@]}"; do
-    [[ -f "$project_dir/.claude-dev/provision.sh" ]] && needs_setup=true
-    [[ -f "$project_dir/.claude-dev/plugins.txt" ]] && needs_setup=true
-  done
-
   # Run the container as a persistent daemon (sleep infinity) so we can
   # always attach via `exec -it`. This avoids TTY issues with `podman start -ai`
   # on macOS, where full-screen TUI output doesn't render on reattach.
   $RUNTIME run -d "${COMMON_ARGS[@]}" "$IMAGE_NAME" sleep infinity
 
-  if [[ "$needs_setup" == true ]]; then
-    # Run provision scripts (system packages) as root.
-    #
-    # STALE-CWD GUARD: The DEBUG trap below protects against a class of bug
-    # where a provision step compiles something in a temp directory, cleans it
-    # up, and leaves the shell's cwd pointing at a deleted path. Subsequent
-    # commands (e.g. `gem install`, `pip install`) spawn subprocesses that call
-    # getcwd(), which fails with ENOENT because the directory inode is gone.
-    #
-    # How it works:
-    #   - `set -T` (functrace) propagates the DEBUG trap into sourced scripts.
-    #     Without this, the trap only fires once before `source` itself, not
-    #     before each command inside the sourced script.
-    #   - The DEBUG trap fires before every command in the sourced script.
-    #   - `pwd -P` resolves the real path; it fails if the dir was deleted.
-    #   - On failure, `cd /workspace` silently restores a valid cwd.
-    #   - When the cwd is fine (the common case), cost is one syscall — negligible.
-    #
-    # Example of the problem this solves:
-    #   A provision script compiles Ruby from source in /tmp/ruby-build-xxx,
-    #   then `rm -rf`s that dir. The next line runs `gem install bundler`.
-    #   Ruby's threaded gem fetcher calls getcwd() in each thread and crashes:
-    #     Errno::ENOENT - No such file or directory - getcwd
-    #   The same can happen with any language/tool that builds in a temp dir.
-    #
-    # If you're modifying this: all three pieces are required:
-    #   - `set -T` — without it, the trap doesn't fire inside the sourced script
-    #   - `source` (not `bash <script>`) — keeps everything in one shell process
-    #   - `pwd -P` (not `cd .`) — `cd .` succeeds on Linux even for deleted dirs
-    for project_dir in "${resolved[@]}"; do
-      # Compute the container-side path for this project.
-      # Single project: /workspace  |  Multi-project: /workspace/<dirname>
-      local container_path
-      if [[ ${#resolved[@]} -eq 1 ]]; then
-        container_path="/workspace"
-      else
-        container_path="/workspace/$(basename "$project_dir")"
-      fi
+  # --- New container setup: update Claude Code, provision, install plugins ---
 
-      if [[ -f "$project_dir/.claude-dev/provision.sh" ]]; then
-        info "Running provision script for $(basename "$project_dir")..."
-        $RUNTIME exec --workdir "$container_path" --user root "$container_name" \
-          bash -c 'set -T; trap '\''pwd -P >/dev/null 2>&1 || cd /workspace 2>/dev/null'\'' DEBUG; source '"$container_path"'/.claude-dev/provision.sh'
-      fi
-    done
+  # Update Claude Code to latest. The base image may be stale if it hasn't
+  # been rebuilt recently, so always pull the latest on new containers.
+  info "Updating Claude Code to latest..."
+  $RUNTIME exec --user root "$container_name" npm install -g @anthropic-ai/claude-code@latest 2>&1 \
+    | tail -1
+  local cc_version
+  cc_version=$($RUNTIME exec "$container_name" claude --version 2>/dev/null || echo "unknown")
+  info "Claude Code: $cc_version"
 
-    # Install plugins from default list and per-project lists.
-    install_plugins "$container_name" "$default_plugins"
-    for project_dir in "${resolved[@]}"; do
-      install_plugins "$container_name" "$project_dir/.claude-dev/plugins.txt"
-    done
+  # Run provision scripts (system packages) as root.
+  #
+  # STALE-CWD GUARD: The DEBUG trap below protects against a class of bug
+  # where a provision step compiles something in a temp directory, cleans it
+  # up, and leaves the shell's cwd pointing at a deleted path. Subsequent
+  # commands (e.g. `gem install`, `pip install`) spawn subprocesses that call
+  # getcwd(), which fails with ENOENT because the directory inode is gone.
+  #
+  # How it works:
+  #   - `set -T` (functrace) propagates the DEBUG trap into sourced scripts.
+  #     Without this, the trap only fires once before `source` itself, not
+  #     before each command inside the sourced script.
+  #   - The DEBUG trap fires before every command in the sourced script.
+  #   - `pwd -P` resolves the real path; it fails if the dir was deleted.
+  #   - On failure, `cd /workspace` silently restores a valid cwd.
+  #   - When the cwd is fine (the common case), cost is one syscall — negligible.
+  #
+  # Example of the problem this solves:
+  #   A provision script compiles Ruby from source in /tmp/ruby-build-xxx,
+  #   then `rm -rf`s that dir. The next line runs `gem install bundler`.
+  #   Ruby's threaded gem fetcher calls getcwd() in each thread and crashes:
+  #     Errno::ENOENT - No such file or directory - getcwd
+  #   The same can happen with any language/tool that builds in a temp dir.
+  #
+  # If you're modifying this: all three pieces are required:
+  #   - `set -T` — without it, the trap doesn't fire inside the sourced script
+  #   - `source` (not `bash <script>`) — keeps everything in one shell process
+  #   - `pwd -P` (not `cd .`) — `cd .` succeeds on Linux even for deleted dirs
+  for project_dir in "${resolved[@]}"; do
+    # Compute the container-side path for this project.
+    # Single project: /workspace  |  Multi-project: /workspace/<dirname>
+    local container_path
+    if [[ ${#resolved[@]} -eq 1 ]]; then
+      container_path="/workspace"
+    else
+      container_path="/workspace/$(basename "$project_dir")"
+    fi
 
-    info "Setup complete."
-  fi
+    if [[ -f "$project_dir/.claude-dev/provision.sh" ]]; then
+      info "Running provision script for $(basename "$project_dir")..."
+      $RUNTIME exec --workdir "$container_path" --user root "$container_name" \
+        bash -c 'set -T; trap '\''pwd -P >/dev/null 2>&1 || cd /workspace 2>/dev/null'\'' DEBUG; source '"$container_path"'/.claude-dev/provision.sh'
+    fi
+  done
+
+  # Install plugins from default list and per-project lists.
+  local default_plugins="$SCRIPT_DIR/config/default-plugins.txt"
+  install_plugins "$container_name" "$default_plugins"
+  for project_dir in "${resolved[@]}"; do
+    install_plugins "$container_name" "$project_dir/.claude-dev/plugins.txt"
+  done
+
+  info "Setup complete."
 
   info "Press Ctrl+C or type /exit to quit."
   echo ""
