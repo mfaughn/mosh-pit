@@ -91,3 +91,38 @@
 ### Relevant Context
 - The quoting bug was introduced in commit `d261dbe` (session auto-resume). Any time code is added inside the `SYNC_AND_LAUNCH='...'` single-quoted block, single quotes must use the `'"'"'` escape pattern or be avoided entirely.
 - `--env-file` does not expand shell variables or handle bare variable names when the file is also `source`d by bash (line 138), so passing host env vars requires explicit `-e` flags in COMMON_ARGS.
+
+## Session Handoff — 2026-04-01
+
+### Completed This Session
+
+- **Status line script syncing into containers**: Added `config/statusline.sh` (shows model, context %, duration, branch) and configured it to sync into `~/.claude/` on every container launch. Added `statusLine` hook to `config/settings.json` pointing to the container path `/home/claude/.claude/statusline.sh`. The host can symlink `~/.claude/statusline.sh` to the repo copy for single-source-of-truth. Commit: `0188e8b`.
+
+- **Fixed provisioning for multi-project containers**: Provision scripts and plugin files were only checked for the first project directory, and the container-side path was hardcoded to `/workspace/.claude-dev/provision.sh`. In multi-project mode, projects mount at `/workspace/<dirname>/`. Now iterates all mounted projects and computes the correct container path for each. Commit: `2a23049`.
+
+- **Resolved shell variables in .env**: Podman's `--env-file` reads values literally without shell expansion, so entries like `GITHUB_PERSONAL_ACCESS_TOKEN=$GITHUB_TOKEN` were passed as the literal string `$GITHUB_TOKEN`. Now generates a resolved temp file after sourcing `.env` (which expands `$VAR` references using the host environment). Only variables listed in `.env` are included — the full host environment is not leaked. Commit: `e281327`.
+
+- **Auto-update Claude Code on new containers**: New containers now run `npm install -g @anthropic-ai/claude-code@latest` before provisioning, so they always start with the current version regardless of base image age. Also fixed `install_plugins` — the `--yes` flag never existed in `claude plugin install`, so plugin installation had been silently failing in all new containers. Commit: `7bf0fae`.
+
+### Current State
+- Branch: `main`
+- Last checkpoint: `7bf0fae` — Auto-update Claude Code on new containers and fix plugin install
+- Tests: N/A (no test suite)
+- All changes pushed to remote
+
+### Next Steps
+1. Carry-forward: remove `TERM=xterm-256color` TODO line in mosh after image rebuild
+2. Carry-forward: delete obsolete `HANDOFF.md` and `SESSION-HANDOFF.md`
+3. Carry-forward: UADF command naming redundancy (`/uadf:uadf-init`)
+4. Run `mosh fresh` for existing project containers to pick up all fixes (env resolution, plugin install, auto-update)
+5. Consider adding `--no-cache` option to `mosh build` for forcing fresh image builds
+
+### Open Questions / Blockers
+- None
+
+### Relevant Context
+- Env vars are baked into containers at `podman run` time. Resuming a container (`mosh`) does NOT re-read `.env`. Changes to `.env` require `mosh fresh` to take effect.
+- The `set -u` (nounset) flag in the mosh script will crash if `.env` references a variable (e.g., `HL7_JIRA=$HL7_JIRA`) that isn't exported in the host shell. This is intentional — it's a loud signal that `~/.zshenv` needs to be sourced rather than silently creating a container with missing env vars.
+- The base image caches the `npm install -g @anthropic-ai/claude-code@latest` layer. Rebuilding with `mosh build` won't update Claude Code unless `--no-cache` is used. The auto-update step on `mosh fresh` makes this acceptable.
+- Plugins installed in one container's named volume don't carry to other projects' containers. Each needs its own plugin installation (now handled automatically via `default-plugins.txt`).
+- Claude Code reads sensitive file contents (like `.env`) into its full context window. There is no selective exclusion mechanism.
