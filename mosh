@@ -353,32 +353,45 @@ cmd_launch() {
     for d in agents templates uadf; do
       [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
     done
-    # Inject MCP servers into ~/.claude.json.
-    # Reads config/mcp.json, fills in credential env vars, merges into ~/.claude.json.
-    # Claude Code overwrites ~/.claude.json on exit, stripping mcpServers — this
-    # re-adds them at the start of every session.
+    # Sync ~/.claude.json from config/claude.json base + MCP credential injection.
+    # Start with config/claude.json (has theme, hasCompletedOnboarding, etc.),
+    # merge in any existing ~/.claude.json state, then re-inject MCP servers
+    # (Claude Code strips mcpServers on exit, so we re-add every launch).
     python3 - <<'"'"'PYEOF'"'"'
 import json, os
+base_path = "/mosh-config/claude.json"
 mcp_path = "/mosh-config/mcp.json"
 claude_path = os.path.expanduser("~/.claude.json")
+# Start from base config (theme, onboarding, etc.)
+try:
+    with open(base_path) as f:
+        base = json.load(f)
+except Exception:
+    base = {}
+# Merge existing ~/.claude.json on top (preserves runtime state)
+try:
+    with open(claude_path) as f:
+        existing = json.load(f)
+except Exception:
+    existing = {}
+config = {**base, **existing}
+# Re-apply base settings that should always win (Claude Code may overwrite these)
+for key in ("theme", "hasCompletedOnboarding", "autoUpdates"):
+    if key in base:
+        config[key] = base[key]
+# Load MCP servers from mcp.json and fill in credentials
 try:
     with open(mcp_path) as f:
         mcp = json.load(f)
 except Exception:
     mcp = {}
 servers = mcp.get("mcpServers", {})
-# Fill in credentials from environment
 if "open-brain" in servers:
     key = os.environ.get("OPENBRAIN_MCP_KEY", "")
     if key:
         servers["open-brain"]["headers"]["x-brain-key"] = key
     else:
-        del servers["open-brain"]  # omit if no key configured
-try:
-    with open(claude_path) as f:
-        config = json.load(f)
-except Exception:
-    config = {}
+        del servers["open-brain"]
 config["mcpServers"] = servers
 with open(claude_path, "w") as f:
     json.dump(config, f, indent=2)
