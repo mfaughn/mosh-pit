@@ -44,7 +44,9 @@ ENV_FILE="$SCRIPT_DIR/.env"
 # History:
 #   1 — Initial versioned release. Named volumes for ~/.claude, tini as PID 1.
 #       Min compat 1: containers without named volumes (bind mount era) are blocked.
-MOSH_VERSION=1
+#   2 — Shared OAuth credentials volume (mosh-oauth-creds). Auth once, reuse
+#       across all projects. Isolate auth-mode env vars from host environment.
+MOSH_VERSION=2
 MOSH_MIN_COMPAT=1
 
 # ---------------------------------------------------------------------------
@@ -134,6 +136,13 @@ preflight_check() {
 # Sets the global COMMON_ARGS array.
 # ---------------------------------------------------------------------------
 build_common_args() {
+  # Clear auth-mode variables before sourcing .env so that each project's
+  # .env file fully controls which auth mode is used. Without this, host
+  # env vars (e.g., ANTHROPIC_VERTEX_PROJECT_ID from ~/.zshenv for a work
+  # project) bleed through and override the intended auth for unrelated
+  # projects that leave these commented out in .env.
+  unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_API_KEY CLOUD_ML_REGION 2>/dev/null || true
+
   # Source .env to detect auth mode and expand $VAR references using the
   # host environment (e.g., $GITHUB_TOKEN from ~/.zshenv).
   set -a; source "$ENV_FILE"; set +a
@@ -224,7 +233,9 @@ cmd_setup() {
     fi
   fi
 
-  # 2. Source .env to check required vars
+  # 2. Source .env to check required vars (clear auth vars first to prevent
+  #    host env from overriding the project's intended auth mode).
+  unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_API_KEY CLOUD_ML_REGION 2>/dev/null || true
   set -a; source "$ENV_FILE"; set +a
 
   if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
@@ -396,6 +407,13 @@ config["mcpServers"] = servers
 with open(claude_path, "w") as f:
     json.dump(config, f, indent=2)
 PYEOF
+    # Seed OAuth credentials from the shared volume if this project does not
+    # have its own yet. This lets you authenticate once and reuse across all
+    # mosh projects on this machine.
+    if [ -f /home/claude/.oauth-creds/.credentials.json ] && [ ! -f ~/.claude/.credentials.json ]; then
+      cp /home/claude/.oauth-creds/.credentials.json ~/.claude/.credentials.json
+      echo -e "\033[0;32m[mosh]\033[0m OAuth credentials loaded from shared store"
+    fi
     # Configure git to authenticate with GitHub over HTTPS using a personal
     # access token. Also rewrite SSH remote URLs to HTTPS so cloned repos
     # that use git@github.com: work without SSH keys in the container.
@@ -424,6 +442,10 @@ PYEOF
       echo -e "\033[0;31m[mosh]\033[0m The saved session may be expired or corrupted."
       echo -e "\033[0;31m[mosh]\033[0m Run \033[1;33mmosh new\033[0m to start a fresh session."
       rm -f "$RESUME_FILE"
+    fi
+    # Persist OAuth credentials to shared volume so other projects can reuse them.
+    if [ -f ~/.claude/.credentials.json ]; then
+      cp ~/.claude/.credentials.json /home/claude/.oauth-creds/.credentials.json
     fi
     # Save session ID for next resume
     NEWEST=$(ls -t "$HOME/.claude/projects/-workspace/"*.jsonl 2>/dev/null | head -1)
@@ -498,6 +520,9 @@ PYEOF
   COMMON_ARGS+=(--label "mosh.version=$MOSH_VERSION")
   # Named volume for ~/.claude provides a writable home for credentials and state.
   COMMON_ARGS+=(--mount "type=volume,source=${claude_home_vol},target=/home/claude/.claude")
+  # Shared OAuth credentials volume — authenticate once, use across all projects.
+  # Credentials are seeded from here into new containers and saved back on exit.
+  COMMON_ARGS+=(--mount "type=volume,source=mosh-oauth-creds,target=/home/claude/.oauth-creds")
   info "Container: $container_name (new)"
 
   if [[ ${#resolved[@]} -eq 1 ]]; then
