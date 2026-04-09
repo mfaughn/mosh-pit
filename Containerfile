@@ -38,11 +38,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
-# Claude Code — installed globally via npm
-# ---------------------------------------------------------------------------
-RUN npm install -g @anthropic-ai/claude-code@latest
-
-# ---------------------------------------------------------------------------
 # Python: Playwright browser automation library
 # ---------------------------------------------------------------------------
 RUN pip3 install --break-system-packages playwright
@@ -73,6 +68,13 @@ RUN useradd -m -s /bin/bash claude && \
     chown -R claude:claude /home/claude /workspace /ms-playwright
 
 USER claude
+
+# ---------------------------------------------------------------------------
+# Claude Code — native installer (npm method is deprecated)
+# Must run as user claude so it installs to ~/.local/bin/claude.
+# ---------------------------------------------------------------------------
+ENV PATH="/home/claude/.local/bin:${PATH}"
+RUN curl -fsSL https://claude.ai/install.sh | bash
 
 # Git credential helper for GitHub token auth (used by mosh launcher).
 # Reads the token from the environment at invocation time — nothing on disk.

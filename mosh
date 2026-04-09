@@ -356,6 +356,7 @@ cmd_launch() {
   local SYNC_AND_LAUNCH
   SYNC_AND_LAUNCH='
     stty sane
+    export PATH="$HOME/.local/bin:$PATH"
     mkdir -p ~/.claude
     for f in settings.json CLAUDE.md mcp.json statusline.sh; do
       [ -f "/mosh-config/$f" ] && cp "/mosh-config/$f" "$HOME/.claude/$f" 2>/dev/null || true
@@ -549,11 +550,11 @@ PYEOF
 
   # --- New container setup: update Claude Code, provision, install plugins ---
 
-  # Update Claude Code to latest. The base image may be stale if it hasn't
-  # been rebuilt recently, so always pull the latest on new containers.
+  # Update Claude Code to latest via the native installer. The base image may
+  # be stale if it hasn't been rebuilt recently, so always update on new containers.
   info "Updating Claude Code to latest..."
-  $RUNTIME exec --user root "$container_name" npm install -g @anthropic-ai/claude-code@latest 2>&1 \
-    | tail -1
+  $RUNTIME exec "$container_name" bash -c 'curl -fsSL https://claude.ai/install.sh | bash' 2>&1 \
+    | tail -3
   local cc_version
   cc_version=$($RUNTIME exec "$container_name" claude --version 2>/dev/null || echo "unknown")
   info "Claude Code: $cc_version"
@@ -777,7 +778,7 @@ cmd_update() {
   $RUNTIME start "$container_name"
 
   info "Updating Claude Code..."
-  $RUNTIME exec --user root "$container_name" npm install -g @anthropic-ai/claude-code@latest
+  $RUNTIME exec "$container_name" bash -c 'curl -fsSL https://claude.ai/install.sh | bash'
 
   # Show the new version
   local new_version
