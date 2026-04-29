@@ -176,6 +176,10 @@ build_common_args() {
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     -e NO_UPDATE_NOTIFIER=1
     -e TERM=xterm-256color  # TODO: remove after image rebuild (baked into Containerfile)
+    # NPM security: block install scripts from untrusted packages, enable audit
+    -e NPM_CONFIG_IGNORE_SCRIPTS=true
+    -e NPM_CONFIG_AUDIT=true
+    -e NPM_CONFIG_FUND=false
     # Repo config is mounted read-only at /mosh-config; synced into ~/.claude at launch.
     # ~/.claude itself lives in a named Podman volume so Claude Code can write to it
     # (e.g., .credentials.json for OAuth token storage).
@@ -420,6 +424,11 @@ PYEOF
     # that use git@github.com: work without SSH keys in the container.
     # This only touches ~/.gitconfig (in the named volume) — host repos are
     # never modified.
+    # Global gitignore — prevents accidentally committing common artifacts
+    if [ -f "/mosh-config/gitignore_global" ]; then
+      cp "/mosh-config/gitignore_global" "$HOME/.gitignore_global"
+      git config --global core.excludesfile "$HOME/.gitignore_global"
+    fi
     if [ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
       git config --global credential.helper "$HOME/.git-credential-helper"
       git config --global url."https://github.com/".insteadOf "git@github.com:"
