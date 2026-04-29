@@ -126,3 +126,43 @@
 - The base image caches the `npm install -g @anthropic-ai/claude-code@latest` layer. Rebuilding with `mosh build` won't update Claude Code unless `--no-cache` is used. The auto-update step on `mosh fresh` makes this acceptable.
 - Plugins installed in one container's named volume don't carry to other projects' containers. Each needs its own plugin installation (now handled automatically via `default-plugins.txt`).
 - Claude Code reads sensitive file contents (like `.env`) into its full context window. There is no selective exclusion mechanism.
+
+## Session Handoff — 2026-04-28
+
+### Completed This Session
+
+- **Skipped onboarding on fresh containers**: `~/.claude.json` lives outside the named volume and was wiped on `mosh fresh`, triggering onboarding every time. Now syncs `config/claude.json` as the base (theme: dark, hasCompletedOnboarding: true, autoUpdates: false), merges existing runtime state, then re-injects MCP servers. Commit: `98a0079`.
+
+- **Updated README**: Rewritten to cover all three auth modes (OAuth, API key, Vertex AI) without emphasizing any one. Added sections for env var resolution, provisioning, project-specific config. Commit: `d2c128c`.
+
+- **Switched from npm to native installer**: Claude Code deprecated the npm install method. Containerfile now uses `curl -fsSL https://claude.ai/install.sh | bash` as user `claude` (installs to `~/.local/bin/`). Updated auto-update on new containers and `mosh update` to use the native installer. Added `~/.local/bin` to PATH in both Containerfile and SYNC_AND_LAUNCH. Commit: `4369ae2`.
+
+- **Upgraded base image to node:22 LTS**: Node 20 reaches end-of-life April 2026. Node 22 is current LTS (through April 2027) and ships with newer npm, silencing update notices. Node is only needed for Playwright MCP now. Commit: `d6e060c`.
+
+- **Added NPM security settings and global gitignore**: Set `NPM_CONFIG_IGNORE_SCRIPTS=true` to block malicious postinstall scripts, `NPM_CONFIG_AUDIT=true`, `NPM_CONFIG_FUND=false`. Added `config/gitignore_global` synced on every launch to prevent accidentally committing common artifacts. Inspired by trailofbits/claude-code-devcontainer. Commit: `f858cd5`.
+
+- **Compared with trailofbits/claude-code-devcontainer**: Analyzed their security-audit-focused approach. Key differences: they target VS Code devcontainers for untrusted code review with optional network isolation; mosh-pit is a standalone CLI with better workflow ergonomics (auto-resume, multi-project, snapshots, config sync). Adopted their NPM security settings and global gitignore ideas.
+
+### Current State
+- Branch: `main`
+- Last checkpoint: `f858cd5` — Add NPM security settings and global gitignore
+- Tests: N/A (no test suite)
+- All changes pushed to remote
+
+### Next Steps
+1. Run `mosh build --no-cache` on host to rebuild image with native installer and node:22
+2. Run `mosh fresh` for existing containers to pick up all fixes
+3. Investigate the "missing file" message the user sees on mosh startup (scrolls away before resume)
+4. Carry-forward: remove `TERM=xterm-256color` TODO line in mosh after image rebuild
+5. Carry-forward: delete obsolete `HANDOFF.md` and `SESSION-HANDOFF.md`
+6. Carry-forward: UADF command naming redundancy (`/uadf:uadf-init`)
+7. Consider adding `ast-grep` to base image (AST-based code search, useful for Claude Code)
+
+### Open Questions / Blockers
+- User reported a "missing file" message on mosh startup that disappears after session resume. Could be related to Playwright chromium path (config/claude.json points to `chromium_headless_shell-1208` but newer builds install v1217), or session resume attempting a file that doesn't exist. Needs investigation.
+
+### Relevant Context
+- The native Claude Code installer installs to `~/.local/bin/claude`. This is in the container's writable layer (not the named volume), so on `mosh fresh` the binary is gone but gets reinstalled by the auto-update step.
+- NPM security env vars (`NPM_CONFIG_IGNORE_SCRIPTS`) are baked into containers at creation time. Existing containers need `mosh fresh` to pick them up. The global gitignore syncs on every launch (no `mosh fresh` needed).
+- The base image caches layers. `mosh build` without `--no-cache` won't pull the new node:22 base or re-run the native installer. First rebuild after this session should use `--no-cache`.
+- `config/claude.json` Playwright MCP executable path may need updating to match the chromium version installed by the current Containerfile build.
