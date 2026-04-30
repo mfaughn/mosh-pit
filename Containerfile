@@ -58,6 +58,13 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
+# Destructive Command Guard (dcg) — binary only, no hooks wired by default.
+# Toggle on per-project at runtime with `mosh dcg on`.
+# ---------------------------------------------------------------------------
+RUN curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/destructive_command_guard/main/install.sh \
+    | bash -s -- --no-configure --system
+
+# ---------------------------------------------------------------------------
 # Python: Playwright browser automation library
 # ---------------------------------------------------------------------------
 RUN pip3 install --break-system-packages playwright

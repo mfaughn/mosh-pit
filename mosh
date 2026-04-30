@@ -423,6 +423,33 @@ config["mcpServers"] = servers
 with open(claude_path, "w") as f:
     json.dump(config, f, indent=2)
 PYEOF
+    # Inject the destructive_command_guard PreToolUse hook into settings.json
+    # if the per-project sentinel ~/.claude/.dcg-enabled exists. Toggle with
+    # `mosh dcg on` / `mosh dcg off` from the host.
+    python3 - <<'"'"'PYEOF'"'"'
+import json, os
+sentinel = os.path.expanduser("~/.claude/.dcg-enabled")
+if os.path.exists(sentinel):
+    settings_path = os.path.expanduser("~/.claude/settings.json")
+    try:
+        with open(settings_path) as f:
+            settings = json.load(f)
+    except Exception:
+        settings = {}
+    pre = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
+    has_dcg = any(
+        h.get("matcher") == "Bash"
+        and any(c.get("command") == "dcg" for c in h.get("hooks", []))
+        for h in pre
+    )
+    if not has_dcg:
+        pre.append({
+            "matcher": "Bash",
+            "hooks": [{"type": "command", "command": "dcg"}],
+        })
+        with open(settings_path, "w") as f:
+            json.dump(settings, f, indent=2)
+PYEOF
     # Seed OAuth credentials from the shared volume if this project does not
     # have its own yet. This lets you authenticate once and reuse across all
     # mosh projects on this machine.
@@ -810,6 +837,56 @@ cmd_update() {
 }
 
 # ---------------------------------------------------------------------------
+# dcg: toggle the destructive_command_guard hook for this project.
+#
+# State is stored as a sentinel file ~/.claude/.dcg-enabled in the project's
+# named volume. The launcher's settings.json sync injects the PreToolUse
+# hook iff the sentinel exists, so toggling here takes effect on next launch.
+#
+# Usage:
+#   mosh dcg            Show current state for this project
+#   mosh dcg on         Enable dcg for this project
+#   mosh dcg off        Disable dcg for this project
+# ---------------------------------------------------------------------------
+cmd_dcg() {
+  local subcmd="${1:-status}"
+  local container_name claude_vol
+  container_name=$(container_name_from_dirs)
+  claude_vol="${container_name}-claude-home"
+
+  case "$subcmd" in
+    on|enable)
+      $RUNTIME run --rm \
+        --mount "type=volume,source=${claude_vol},target=/v" \
+        "$IMAGE_NAME" touch /v/.dcg-enabled
+      info "dcg ENABLED for $container_name"
+      info "Restart your session (or run 'mosh new') to load the hook."
+      ;;
+    off|disable)
+      $RUNTIME run --rm \
+        --mount "type=volume,source=${claude_vol},target=/v" \
+        "$IMAGE_NAME" rm -f /v/.dcg-enabled
+      info "dcg DISABLED for $container_name"
+      info "Restart your session (or run 'mosh new') to drop the hook."
+      ;;
+    status|"")
+      if $RUNTIME run --rm \
+           --mount "type=volume,source=${claude_vol},target=/v" \
+           "$IMAGE_NAME" test -f /v/.dcg-enabled 2>/dev/null; then
+        info "dcg: ENABLED for $container_name"
+      else
+        info "dcg: DISABLED for $container_name"
+      fi
+      ;;
+    *)
+      error "Unknown dcg subcommand: $subcmd"
+      error "Usage: $(basename "$0") dcg [on|off|status]"
+      exit 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # help
 # ---------------------------------------------------------------------------
 cmd_help() {
@@ -827,6 +904,7 @@ Commands:
   fresh     Remove existing container and start clean from base image
   provision Re-run config/provision.sh in the project's container
   update    Update Claude Code (npm) inside existing container without launching
+  dcg       Toggle the destructive-command-guard hook (on|off|status)
   help      Show this help
 
 Launch modes:
@@ -867,6 +945,7 @@ case "${1:-}" in
   fresh)          shift; cmd_fresh "$@" ;;
   provision)      cmd_provision ;;
   update)         shift; cmd_update "$@" ;;
+  dcg)            shift; cmd_dcg "$@" ;;
   new)            shift; MOSH_NEW_SESSION=1 cmd_launch "$@" ;;
   help|-h|--help) cmd_help ;;
   "")             cmd_launch ;;
