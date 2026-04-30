@@ -35,6 +35,26 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     jq \
+    # Tools Claude tends to reach for when present
+    ripgrep \
+    fd-find \
+    shellcheck \
+    && rm -rf /var/lib/apt/lists/*
+
+# Debian ships fd-find as `fdfind` to avoid conflict with another package.
+# Symlink to `fd` so it matches every doc and Claude's expectations.
+RUN ln -s /usr/bin/fdfind /usr/local/bin/fd
+
+# ---------------------------------------------------------------------------
+# GitHub CLI — installed from the official GitHub apt repo
+# ---------------------------------------------------------------------------
+RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+      -o /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" \
+       > /etc/apt/sources.list.d/github-cli.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
 # ---------------------------------------------------------------------------
@@ -49,7 +69,7 @@ RUN pip3 install --break-system-packages playwright
 # ---------------------------------------------------------------------------
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV TERM=xterm-256color
-RUN npm install -g @playwright/mcp@latest
+RUN npm install -g @playwright/mcp@latest @ast-grep/cli
 
 # Install Chromium for both the MCP server and the Python playwright package.
 # They may bundle different playwright-core versions expecting different builds.

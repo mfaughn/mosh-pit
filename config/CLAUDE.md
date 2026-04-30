@@ -21,6 +21,18 @@
 - Be direct; skip unnecessary preamble
 - When I ask "why," explain the tradeoffs, not just the choice
 
+## Available Tools
+
+The container ships with these CLI tools — prefer them when applicable:
+
+- **`gh`** — GitHub CLI. Use for PR/issue/release ops, `gh api` for raw REST/GraphQL, `gh run` for Actions. Authenticated via `GITHUB_PERSONAL_ACCESS_TOKEN` if set in `.env`.
+- **`rg` (ripgrep)** — Faster `grep`, respects `.gitignore`. Default choice for text search.
+- **`fd`** — Faster `find`, respects `.gitignore`. Default choice for file lookups.
+- **`ast-grep` (`sg`)** — Structural code search by AST pattern. Use for refactors and structural queries that regex can't express cleanly (e.g. "find all calls to `foo()` whose first arg is `null`").
+- **`shellcheck`** — Lints shell scripts. Run before declaring a bash edit done.
+- **`jq`** — JSON query/transform.
+- **`tini`** — PID 1 init (transparent).
+
 ## Container Package Tracking
 
 This environment runs inside a container. When you install system packages
