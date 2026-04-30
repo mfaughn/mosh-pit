@@ -14,8 +14,9 @@
 .mcp.json
 .playwright-mcp/
 
-# Symlink (user creates locally)
+# Symlinks (user creates locally on host)
 claude-dev
+host_claude_dir
 
 # Temporary helper scripts
 fixmosh

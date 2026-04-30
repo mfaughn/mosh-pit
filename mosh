@@ -175,7 +175,6 @@ build_common_args() {
     --env-file "$RESOLVED_ENV_FILE"
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     -e NO_UPDATE_NOTIFIER=1
-    -e TERM=xterm-256color  # TODO: remove after image rebuild (baked into Containerfile)
     # NPM security: block install scripts from untrusted packages, enable audit
     -e NPM_CONFIG_IGNORE_SCRIPTS=true
     -e NPM_CONFIG_AUDIT=true
@@ -374,7 +373,7 @@ cmd_launch() {
     # merge in any existing ~/.claude.json state, then re-inject MCP servers
     # (Claude Code strips mcpServers on exit, so we re-add every launch).
     python3 - <<'"'"'PYEOF'"'"'
-import json, os
+import glob, json, os
 base_path = "/mosh-config/claude.json"
 mcp_path = "/mosh-config/mcp.json"
 claude_path = os.path.expanduser("~/.claude.json")
@@ -408,6 +407,18 @@ if "open-brain" in servers:
         servers["open-brain"]["headers"]["x-brain-key"] = key
     else:
         del servers["open-brain"]
+# Resolve the chromium headless_shell binary dynamically. Playwright revs the
+# bundled Chromium version, so a hardcoded path goes stale every few months
+# and Playwright MCP fails to start with a "no such file" error that scrolls
+# off-screen during session resume.
+if "playwright" in servers:
+    shells = sorted(glob.glob(
+        "/ms-playwright/chromium_headless_shell-*/chrome-linux/headless_shell"
+    ))
+    if shells:
+        args = servers["playwright"].setdefault("args", [])
+        if "--executable-path" not in args:
+            args.extend(["--executable-path", shells[-1]])
 config["mcpServers"] = servers
 with open(claude_path, "w") as f:
     json.dump(config, f, indent=2)
