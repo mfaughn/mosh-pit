@@ -10,8 +10,6 @@
         "--no-sandbox",
         "--browser",
         "chromium",
-        "--executable-path",
-        "/ms-playwright/chromium_headless_shell-1208/chrome-linux/headless_shell",
         "--user-data-dir",
         "/tmp/playwright-profile"
       ]
