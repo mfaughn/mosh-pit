@@ -166,3 +166,37 @@
 - NPM security env vars (`NPM_CONFIG_IGNORE_SCRIPTS`) are baked into containers at creation time. Existing containers need `mosh fresh` to pick them up. The global gitignore syncs on every launch (no `mosh fresh` needed).
 - The base image caches layers. `mosh build` without `--no-cache` won't pull the new node:22 base or re-run the native installer. First rebuild after this session should use `--no-cache`.
 - `config/claude.json` Playwright MCP executable path may need updating to match the chromium version installed by the current Containerfile build.
+
+## Session Handoff — 2026-05-01
+
+### Completed This Session
+
+- **Cleanup carry-forwards**: Deleted obsolete `HANDOFF.md` and `SESSION-HANDOFF.md`. Added `host_claude_dir` to `.gitignore` (host-side symlink to `/Users/mrf/.claude` that landed in the repo). Removed redundant `-e TERM=xterm-256color` line in `mosh` (Containerfile already bakes it in). Commit: `8c56e2a`.
+
+- **Added CLI tools to base image**: `gh` (GitHub CLI, via official apt repo), `ripgrep`, `fd-find` (symlinked to `fd`), `shellcheck` via apt; `@ast-grep/cli` via npm alongside `@playwright/mcp`. Documented the available tool set in `config/CLAUDE.md` so Claude reaches for them over slower defaults. Commit: `8620167`.
+
+- **Fixed Playwright chromium path drift**: The hardcoded `/ms-playwright/chromium_headless_shell-1208/...` path in `config/mcp.json` and `config/claude.json` went stale every few months as Playwright updated its bundled Chromium, producing a "missing file" error that scrolled off-screen during session resume on freshly built containers. Removed the hardcoded `--executable-path` from both files; the launcher's python sync now globs `/ms-playwright/chromium_headless_shell-*/chrome-linux/headless_shell` and appends the newest as `--executable-path` at launch. Also dropped the unused `mcpServers` section from `config/claude.json` (the python sync overwrites it from `mcp.json` regardless). Commit: `481a3a5`.
+
+- **Added destructive_command_guard (dcg), opt-in per project**: Container ships `dcg` in `/usr/local/bin/` (installed via the official `install.sh` with `--no-configure --system` — binary only, no hooks wired by default). New `mosh dcg [on|off|status]` command toggles a per-project sentinel `~/.claude/.dcg-enabled` in the project's named volume by spinning up a one-off container against the volume. The launcher's settings.json sync conditionally injects the PreToolUse Bash hook based on the sentinel. Commit: `6448cfc`.
+
+### Current State
+- Branch: `main`
+- Last checkpoint: `6448cfc` — Add destructive_command_guard, opt-in per project via mosh dcg
+- Tests: N/A (no test suite). Verified bash + embedded python syntax, JSON validity, end-to-end sync simulation, dcg hook injection idempotency.
+- All changes pushed to remote.
+
+### Next Steps
+1. `mosh build --no-cache` on host to rebuild image with new tools (gh, ast-grep, ripgrep, fd, shellcheck) and dcg binary, plus the node:22 + native-installer changes from the prior session that may not have been picked up yet.
+2. `mosh fresh` for existing project containers to pick up the new image.
+3. mosh-script changes (chromium path resolution, TERM removal, `mosh dcg` command) take effect on next `mosh` launch — no rebuild needed for those.
+4. Decide whether the carry-forward "UADF command naming redundancy (`/uadf:uadf-init`)" is worth addressing.
+
+### Open Questions / Blockers
+- None. The dcg toggle requires `/exit` + `mosh` to take effect (settings.json is only synced at launch, and Claude Code reads it at startup). User confirmed this is acceptable. A future enhancement could add an in-session slash command if the friction becomes annoying.
+
+### Relevant Context
+- **dcg rationale**: mosh-pit's container boundary does NOT protect `/workspace` (it's a bind mount), so `rm -rf /workspace`, `git reset --hard`, `git push --force`, etc. really can lose work. dcg is opt-in rather than default-on because false positives would add daily friction against `--dangerously-skip-permissions`, which is the whole point of mosh.
+- **dcg state model**: The sentinel is per-project (lives in the project's named volume `${container_name}-claude-home`), so toggling it for one project does not affect others. The hook gets injected by the launcher's python sync, which means `mosh dcg on` followed by `/exit` + `mosh` is the canonical activation flow.
+- **dcg install method**: Used the official `install.sh` with `--no-configure --system`. Auto-detects platform (linux-aarch64 here), downloads the prebuilt binary from GitHub releases with checksum verification, installs to `/usr/local/bin/`. `--no-configure` skips all the auto-hook wiring (Claude Code, Gemini CLI, Cursor, etc.) so we control hook state ourselves via the sentinel.
+- **chromium path resolution**: The glob-based approach picks the lexically-newest version, which works for the foreseeable future since Playwright revisions monotonically increase from the current 4-digit values. The container at this point has both `1208` and `1217` installed because rebuilds at different times added each; a fresh build today would only have the newest.
+- **Available tools in CLAUDE.md**: `config/CLAUDE.md` now documents `gh`, `rg`, `fd`, `ast-grep`, `shellcheck`, `jq` so Claude prefers them over slower defaults like `find`/`grep`. Claude figures out tools from PATH on its own, but explicit documentation makes it more likely to reach for the less-famous ones (especially `ast-grep`).
