@@ -407,18 +407,23 @@ if "open-brain" in servers:
         servers["open-brain"]["headers"]["x-brain-key"] = key
     else:
         del servers["open-brain"]
-# Resolve the chromium headless_shell binary dynamically. Playwright revs the
-# bundled Chromium version, so a hardcoded path goes stale every few months
-# and Playwright MCP fails to start with a "no such file" error that scrolls
-# off-screen during session resume.
+# Playwright MCP is opt-in per project — toggle with `mosh playwright on`.
+# Spawning chromium for every project that does not need a browser is wasted
+# overhead and another startup that can fail.
 if "playwright" in servers:
-    shells = sorted(glob.glob(
-        "/ms-playwright/chromium_headless_shell-*/chrome-linux/headless_shell"
-    ))
-    if shells:
-        args = servers["playwright"].setdefault("args", [])
-        if "--executable-path" not in args:
-            args.extend(["--executable-path", shells[-1]])
+    if not os.path.exists(os.path.expanduser("~/.claude/.playwright-enabled")):
+        del servers["playwright"]
+    else:
+        # Resolve the chromium headless_shell binary dynamically. Playwright
+        # revs the bundled Chromium version, so a hardcoded path goes stale
+        # every few months and Playwright MCP fails to start.
+        shells = sorted(glob.glob(
+            "/ms-playwright/chromium_headless_shell-*/chrome-linux/headless_shell"
+        ))
+        if shells:
+            args = servers["playwright"].setdefault("args", [])
+            if "--executable-path" not in args:
+                args.extend(["--executable-path", shells[-1]])
 config["mcpServers"] = servers
 with open(claude_path, "w") as f:
     json.dump(config, f, indent=2)
@@ -887,6 +892,57 @@ cmd_dcg() {
 }
 
 # ---------------------------------------------------------------------------
+# playwright: toggle the Playwright MCP server for this project.
+#
+# Off by default for every project — Playwright spawns Chromium and exposes a
+# wide tool surface, which is wasted overhead for projects that don't drive a
+# browser. State is a per-project sentinel ~/.claude/.playwright-enabled in
+# the named volume, mirroring `mosh dcg`.
+#
+# Usage:
+#   mosh playwright            Show current state for this project
+#   mosh playwright on         Enable Playwright MCP for this project
+#   mosh playwright off        Disable Playwright MCP for this project
+# ---------------------------------------------------------------------------
+cmd_playwright() {
+  local subcmd="${1:-status}"
+  local container_name claude_vol
+  container_name=$(container_name_from_dirs)
+  claude_vol="${container_name}-claude-home"
+
+  case "$subcmd" in
+    on|enable)
+      $RUNTIME run --rm \
+        --mount "type=volume,source=${claude_vol},target=/v" \
+        "$IMAGE_NAME" touch /v/.playwright-enabled
+      info "Playwright MCP ENABLED for $container_name"
+      info "Restart your session (or run 'mosh new') to load the server."
+      ;;
+    off|disable)
+      $RUNTIME run --rm \
+        --mount "type=volume,source=${claude_vol},target=/v" \
+        "$IMAGE_NAME" rm -f /v/.playwright-enabled
+      info "Playwright MCP DISABLED for $container_name"
+      info "Restart your session (or run 'mosh new') to drop the server."
+      ;;
+    status|"")
+      if $RUNTIME run --rm \
+           --mount "type=volume,source=${claude_vol},target=/v" \
+           "$IMAGE_NAME" test -f /v/.playwright-enabled 2>/dev/null; then
+        info "Playwright MCP: ENABLED for $container_name"
+      else
+        info "Playwright MCP: DISABLED for $container_name"
+      fi
+      ;;
+    *)
+      error "Unknown playwright subcommand: $subcmd"
+      error "Usage: $(basename "$0") playwright [on|off|status]"
+      exit 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # help
 # ---------------------------------------------------------------------------
 cmd_help() {
@@ -904,8 +960,9 @@ Commands:
   fresh     Remove existing container and start clean from base image
   provision Re-run config/provision.sh in the project's container
   update    Update Claude Code (npm) inside existing container without launching
-  dcg       Toggle the destructive-command-guard hook (on|off|status)
-  help      Show this help
+  dcg        Toggle the destructive-command-guard hook (on|off|status)
+  playwright Toggle the Playwright MCP server (on|off|status)
+  help       Show this help
 
 Launch modes:
   $(basename "$0")                          Mount current directory as /workspace
@@ -946,6 +1003,7 @@ case "${1:-}" in
   provision)      cmd_provision ;;
   update)         shift; cmd_update "$@" ;;
   dcg)            shift; cmd_dcg "$@" ;;
+  playwright)     shift; cmd_playwright "$@" ;;
   new)            shift; MOSH_NEW_SESSION=1 cmd_launch "$@" ;;
   help|-h|--help) cmd_help ;;
   "")             cmd_launch ;;
