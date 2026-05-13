@@ -1,8 +1,10 @@
 # Default plugins installed in every new claude-dev container.
 # One plugin per line, in the format: name@marketplace
 # Lines starting with # are ignored.
+#
+# Note: playwright is intentionally not here — it's heavy and only useful for
+# browser automation. Toggle on per-project with `mosh playwright on`.
 
-playwright@claude-plugins-official
 code-review@claude-plugins-official
 code-simplifier@claude-plugins-official
 ralph-loop@claude-plugins-official

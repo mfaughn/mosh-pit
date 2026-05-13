@@ -194,6 +194,49 @@
 ### Open Questions / Blockers
 - None. The dcg toggle requires `/exit` + `mosh` to take effect (settings.json is only synced at launch, and Claude Code reads it at startup). User confirmed this is acceptable. A future enhancement could add an in-session slash command if the friction becomes annoying.
 
+### Addendum — Playwright MCP made opt-in (same session)
+
+After the initial handoff was written, user noticed two Playwright MCP entries in `/mcp` both showing failed: one from our `config/mcp.json` (with `--headless --no-sandbox` and the dynamically-resolved chromium path), and one from the official `playwright@claude-plugins-official` plugin (bare `npx @playwright/mcp@latest`, no flags — chromium can't run as non-root in the container without `--no-sandbox`). The two collide on the server name "playwright" so both show as failed.
+
+Fix:
+- Removed `playwright@claude-plugins-official` from `enabledPlugins` in `config/settings.json`.
+- Removed it from `config/default-plugins.txt` so new containers no longer install it (otherwise `claude plugin install` re-enables it on `mosh fresh`).
+- Made the user-config Playwright MCP opt-in: launcher python sync drops the `playwright` server from `~/.claude.json` unless `~/.claude/.playwright-enabled` exists in the named volume.
+- Added `mosh playwright [on|off|status]` mirroring `mosh dcg`. Same persistence model — sentinel lives in the named volume, survives `mosh fresh`, only `podman volume rm` clears it.
+
+Commit: `4d09ade` (playwright opt-in), then a follow-up commit dropping it from default-plugins.txt.
+
+### Updated state (after Playwright work)
+- Branch: `main`
+- All changes pushed.
+- Default for new projects: no Playwright MCP, no Playwright plugin. Browser automation requires explicit `mosh playwright on` per project.
+
+### What gets loaded into mosh containers (reference)
+
+**Plugins** (installed by `claude plugin install` from `config/default-plugins.txt`, enabled via `enabledPlugins` in `config/settings.json`):
+- `code-review`, `code-simplifier`, `ralph-loop`, `commit-commands`, `frontend-design` — all from `@claude-plugins-official`
+- `playwright` — opt-in per project via `mosh playwright on` (not in default-plugins.txt anymore)
+- Per-project: anything in `<project>/.claude-dev/plugins.txt`
+
+**MCP servers** (from `config/mcp.json`, injected into `~/.claude.json` by launcher sync):
+- `playwright` — only when `~/.claude/.playwright-enabled` sentinel exists
+- `open-brain` — only when `OPENBRAIN_MCP_KEY` env var is set
+
+**Agents** (synced from `config/agents/` to `~/.claude/agents/`):
+- `web-researcher` — used for web searches since the model has WebSearch blocked
+
+**Hooks** (conditionally injected into `~/.claude/settings.json` by launcher sync):
+- `dcg` PreToolUse on Bash — only when `~/.claude/.dcg-enabled` sentinel exists
+
+**Commands** (bind-mounted read-only from host's `~/.claude/commands/`):
+- Whatever the user has on the host — single source of truth, no duplication
+
+**Templates** (synced from `config/templates/` to `~/.claude/templates/`):
+- `architecture.md`, `claudemd.md`, `lessons.md`, `spec.md`, `tasks.md`
+
+**UADF skill bundle** (synced from `config/uadf/` to `~/.claude/uadf/`):
+- `framework.md` plus `templates/` — referenced by the `/uadf-*` skills installed via the UADF plugin/marketplace
+
 ### Relevant Context
 - **dcg rationale**: mosh-pit's container boundary does NOT protect `/workspace` (it's a bind mount), so `rm -rf /workspace`, `git reset --hard`, `git push --force`, etc. really can lose work. dcg is opt-in rather than default-on because false positives would add daily friction against `--dangerously-skip-permissions`, which is the whole point of mosh.
 - **dcg state model**: The sentinel is per-project (lives in the project's named volume `${container_name}-claude-home`), so toggling it for one project does not affect others. The hook gets injected by the launcher's python sync, which means `mosh dcg on` followed by `/exit` + `mosh` is the canonical activation flow.
