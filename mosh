@@ -145,8 +145,12 @@ build_common_args() {
   # projects that leave these commented out in .env.
   # CLAUDE_CODE_USE_VERTEX is included so a leftover global "=1" from the old
   # Vertex setup cannot survive into a project that has migrated to a gateway.
+  # ANTHROPIC_MODEL is unset too: a stale host pin (e.g. a model name from a
+  # previous provider) silently overrides the tier aliases and causes 403s.
+  # Note this list must NOT include ANTHROPIC_BASE_URL or the tier aliases —
+  # .env references those by name, so unsetting them first would blank them.
   unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_API_KEY CLOUD_ML_REGION \
-        CLAUDE_CODE_USE_VERTEX 2>/dev/null || true
+        CLAUDE_CODE_USE_VERTEX ANTHROPIC_MODEL 2>/dev/null || true
 
   # Source .env to detect auth mode and expand $VAR references using the
   # host environment (e.g., $GITHUB_TOKEN from ~/.zshenv).
@@ -253,8 +257,12 @@ cmd_setup() {
   #    host env from overriding the project's intended auth mode).
   # CLAUDE_CODE_USE_VERTEX is included so a leftover global "=1" from the old
   # Vertex setup cannot survive into a project that has migrated to a gateway.
+  # ANTHROPIC_MODEL is unset too: a stale host pin (e.g. a model name from a
+  # previous provider) silently overrides the tier aliases and causes 403s.
+  # Note this list must NOT include ANTHROPIC_BASE_URL or the tier aliases —
+  # .env references those by name, so unsetting them first would blank them.
   unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_API_KEY CLOUD_ML_REGION \
-        CLAUDE_CODE_USE_VERTEX 2>/dev/null || true
+        CLAUDE_CODE_USE_VERTEX ANTHROPIC_MODEL 2>/dev/null || true
   set -a; source "$ENV_FILE"; set +a
 
   if [[ -n "${ANTHROPIC_API_KEY:-}" && -n "${ANTHROPIC_BASE_URL:-}" ]]; then
