@@ -35,6 +35,30 @@ for d in agents templates uadf; do
   [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
 done
 
+# Trust any extra CA certificates in /mosh-config/certs (e.g. the internal NIST
+# CA needed to reach the LiteLLM gateway). Without this, Claude Code fails with
+# "SSL certificate verification failed".
+#
+# Two variables are needed because they work differently:
+#   NODE_EXTRA_CA_CERTS  Node ADDS these to its built-in bundle.
+#   SSL_CERT_FILE etc.   These REPLACE the bundle, so they must point at a
+#                        combined file — otherwise public sites stop verifying.
+if compgen -G "/mosh-config/certs/*.pem" >/dev/null 2>&1; then
+  EXTRA_CA_DIR="$HOME/.claude/certs"
+  mkdir -p "$EXTRA_CA_DIR"
+  cat /mosh-config/certs/*.pem > "$EXTRA_CA_DIR/extra-ca.pem"
+  cat /etc/ssl/certs/ca-certificates.crt "$EXTRA_CA_DIR/extra-ca.pem" \
+    > "$EXTRA_CA_DIR/combined-ca.pem"
+
+  export NODE_EXTRA_CA_CERTS="$EXTRA_CA_DIR/extra-ca.pem"
+  export SSL_CERT_FILE="$EXTRA_CA_DIR/combined-ca.pem"
+  export REQUESTS_CA_BUNDLE="$EXTRA_CA_DIR/combined-ca.pem"
+  export CURL_CA_BUNDLE="$EXTRA_CA_DIR/combined-ca.pem"
+  export GIT_SSL_CAINFO="$EXTRA_CA_DIR/combined-ca.pem"
+
+  echo -e "\033[0;32m[mosh]\033[0m Extra CA certificates trusted ($(grep -c 'BEGIN CERTIFICATE' "$EXTRA_CA_DIR/extra-ca.pem"))"
+fi
+
 # Sync ~/.claude.json from config/claude.json base + MCP credential injection.
 # Start with config/claude.json (has theme, hasCompletedOnboarding, etc.),
 # merge in any existing ~/.claude.json state, then re-inject MCP servers
