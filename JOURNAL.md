@@ -243,3 +243,48 @@ Commit: `4d09ade` (playwright opt-in), then a follow-up commit dropping it from 
 - **dcg install method**: Used the official `install.sh` with `--no-configure --system`. Auto-detects platform (linux-aarch64 here), downloads the prebuilt binary from GitHub releases with checksum verification, installs to `/usr/local/bin/`. `--no-configure` skips all the auto-hook wiring (Claude Code, Gemini CLI, Cursor, etc.) so we control hook state ourselves via the sentinel.
 - **chromium path resolution**: The glob-based approach picks the lexically-newest version, which works for the foreseeable future since Playwright revisions monotonically increase from the current 4-digit values. The container at this point has both `1208` and `1217` installed because rebuilds at different times added each; a fresh build today would only have the newest.
 - **Available tools in CLAUDE.md**: `config/CLAUDE.md` now documents `gh`, `rg`, `fd`, `ast-grep`, `shellcheck`, `jq` so Claude prefers them over slower defaults like `find`/`grep`. Claude figures out tools from PATH on its own, but explicit documentation makes it more likely to reach for the less-famous ones (especially `ast-grep`).
+
+---
+
+## Session Handoff — 2026-09-10
+
+### Completed This Session
+
+- **Extracted the container launch script**: The ~150-line config-sync-and-launch routine lived as a single-quoted bash string (`SYNC_AND_LAUNCH`) inside `mosh`, which meant shellcheck and editors couldn't see it and `ps aux` printed the whole thing on one line per running container. Moved it to `config/launch.sh`, executed as `bash /mosh-config/launch.sh`. Because `config/` is already bind-mounted read-only at `/mosh-config`, existing containers pick it up with no rebuild. Also converted `claude $CLAUDE_ARGS` (unquoted, word-split) to a proper array, and added a `launch.sh` existence check next to the `settings.json` one in setup. Commit: `639bace`.
+
+- **Migrated Claude auth from Vertex AI to the NIST LiteLLM gateway**: `.env` now references gateway variables from the host shell instead of hardcoding Vertex project/region. Added a gateway auth-mode branch that prints the resolved endpoint at startup, plus a warning when a key is set without a base URL (which would silently send a gateway key to `api.anthropic.com`). Removed the `"model"` pin and stale `ANTHROPIC_DEFAULT_OPUS_MODEL` from `config/settings.json` — those names don't exist on the gateway. Deleted `compose.yaml` (nothing invoked it; `COMPOSE_FILE` was assigned and never read; it hardcoded `CLAUDE_CODE_USE_VERTEX: "1"`). Commit: `639bace`.
+
+- **Trusted the internal NIST CA inside the container**: Claude Code failed with "SSL certificate verification failed" against the gateway. `launch.sh` now trusts any `*.pem` in `/mosh-config/certs`. Commit: `271c292`.
+
+- **Stopped a stale `ANTHROPIC_MODEL` from overriding the tier aliases**: A leftover host export pinned `claude-opus-5@default[1m]`, producing a gateway 403 whose message misleadingly suggests running `/login`. Added `ANTHROPIC_MODEL` to both unset lists so only `.env` can set it. Also quoted `.env` references as `${VAR:-}` — a bug introduced earlier the same session, where an unset host variable would abort `mosh` under `set -u` with a bare "unbound variable". Commit: `30d5cac`.
+
+- **Read host config from a pristine shell at launch**: Editing `~/.zshenv` then launching from the same terminal used that terminal's stale values, forcing an exit/source/relaunch cycle. `mosh` now probes a fresh shell under `env -i`. The variable list is scraped from the `${NAME:-}` references in `.env` rather than hardcoded, so it can't drift. Commit: `5ae37be`.
+
+### Current State
+- Branch: `main`
+- Last checkpoint: `5ae37be` — Read host config from a pristine shell at launch
+- Tests: N/A (no test suite). Verified bash syntax and shellcheck on `mosh` and `config/launch.sh` (only pre-existing SC1090/SC2155/SC2015/SC2012 remain), JSON validity, and simulated env resolution against the real `.env` including stale-value and unbound-variable cases. CA chain verified against the live gateway (curl and Node both reach it; github.com still verifies).
+- All changes pushed to remote.
+- Gateway confirmed working end to end by the user: arithmetic returns and the Anthropic model env vars look correct inside the container.
+
+### Next Steps
+1. Exercise the tier aliases individually — `/model opus`, `/model sonnet`, `/fast`, and a `web-researcher` subagent call. A successful prompt only proves the *default* model resolves; a typo surviving in `ANTHROPIC_DEFAULT_SONNET_MODEL` or `_HAIKU_MODEL` stays invisible until `/fast` or a subagent runs.
+2. Run `mosh fresh` on the remaining project containers to pick up the gateway env.
+3. Carry-forward, still undecided: whether the UADF command naming redundancy (`/uadf:uadf-init`) is worth addressing.
+
+### Open Questions / Blockers
+- None blocking.
+
+### Relevant Context — things that cost time this session
+
+- **Auth env is baked in at container creation, config files are not.** `--env-file` is evaluated at `podman run`, so changing an environment variable requires `mosh fresh` (recreate), not just `mosh` (start + exec). By contrast `config/` is bind-mounted read-only, so `settings.json`, `launch.sh` and the CA certs apply on the *next launch* with no rebuild and no `fresh`. Knowing which of the two a change falls under saves a lot of guessing. `MOSH_VERSION` was bumped to 3 so stale containers warn.
+
+- **An image rebuild (`mosh build`) is never needed for configuration.** The Containerfile copies exactly one file (`config/git-credential-helper`). Everything else arrives through the `/mosh-config` mount. This contradicted the premise of the migration brief, which assumed settings were baked into the image.
+
+- **`source ~/.zshenv` cannot unset a variable you deleted from it.** Sourcing only re-runs the exports still present in the file, so a deleted line leaves the old value live in that shell. Only a new shell — or the `env -i` probe added in `5ae37be` — reflects deletions. This is distinct from *editing* a value, where sourcing does work; the two failure modes look identical from the outside.
+
+- **The container diverges from the host on TLS.** macOS trusts `NISTIssuingCA03` via Keychain, so host-native Claude Code reaches the gateway fine while the container fails. Worse, the gateway sends only its leaf certificate and omits the intermediate (openssl verify error 21, not 20), so trusting the root alone is insufficient — the bundle must carry both. Fingerprints and regeneration steps are in `config/certs/README.md`; the root fingerprint was confirmed against the host Keychain.
+
+- **`ANTHROPIC_MODEL` and `ANTHROPIC_DEFAULT_*_MODEL` do different jobs.** The former pins one model; the latter three define what "opus"/"sonnet"/"haiku" resolve to, which is what `/model`, `/fast`, `opusplan` and subagent selection depend on. A stale pin silently defeats the aliases. This caused confusion three separate times in one day, hence the unset.
+
+- **`config/settings.json` is committed**, so the API key can never live there. The key is referenced from `.env` as `$NIST_LITELLM_KEY` — a name distinct from `ANTHROPIC_API_KEY` specifically because `mosh` unsets `ANTHROPIC_API_KEY` before reading `.env`; a self-reference would resolve to empty. The real value lives in `~/.zshenv`, which also serves host-native Claude Code, so there is one source of truth for both.
