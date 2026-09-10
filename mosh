@@ -134,10 +134,71 @@ preflight_check() {
 }
 
 # ---------------------------------------------------------------------------
+# Re-read the host variables that .env references, from a pristine shell.
+#
+# Without this, launching from a terminal that was opened before you edited
+# ~/.zshenv uses the stale values that terminal still holds, so you have to
+# exit, source, and relaunch. Reading from a fresh shell means an edit to
+# ~/.zshenv takes effect on the very next launch.
+#
+# The probe shell starts under `env -i` so it inherits nothing from this
+# shell — the values reflect the shell config files alone. That also means a
+# variable you DELETED from ~/.zshenv correctly comes back empty, which plain
+# `source ~/.zshenv` can never detect.
+#
+# Only names that .env actually references (as ${NAME:-}) are read, so this
+# imports nothing else from the host environment.
+# ---------------------------------------------------------------------------
+refresh_referenced_host_vars() {
+  local probe_shell="${SHELL:-}"
+  if [[ ! -x "$probe_shell" ]]; then
+    probe_shell="$(command -v zsh || command -v bash || true)"
+  fi
+  [[ -x "$probe_shell" ]] || return 0
+
+  # Collect the ${NAME:-} references out of .env.
+  local names=()
+  local n
+  while IFS= read -r n; do
+    [[ -n "$n" ]] && names+=("$n")
+  done < <(grep -oE '\$\{[A-Z0-9_]+:-\}' "$ENV_FILE" 2>/dev/null \
+           | sed -E 's/^\$\{([A-Z0-9_]+):-\}$/\1/' | sort -u)
+  [[ ${#names[@]} -gt 0 ]] || return 0
+
+  # Build a tiny script that prints NAME=value for each name. Written with
+  # ${NAME-} rather than a shell-specific indirect expansion so it is valid
+  # in both zsh and bash. Names are [A-Z0-9_] only, so this cannot inject.
+  local probe_script=""
+  for n in "${names[@]}"; do
+    probe_script+="printf '%s=%s\\n' '$n' \"\${$n-}\""$'\n'
+  done
+
+  local probe_output
+  probe_output=$(env -i HOME="$HOME" PATH="$PATH" USER="${USER:-}" \
+                   "$probe_shell" -c "$probe_script" 2>/dev/null) || return 0
+  [[ -n "$probe_output" ]] || return 0
+
+  local line name value
+  while IFS= read -r line; do
+    name="${line%%=*}"
+    value="${line#*=}"
+    [[ "$name" =~ ^[A-Z0-9_]+$ ]] || continue
+    if [[ -n "$value" ]]; then
+      export "$name=$value"
+    else
+      unset "$name" 2>/dev/null || true
+    fi
+  done <<< "$probe_output"
+}
+
+# ---------------------------------------------------------------------------
 # Common: build the env and volume args used by both launch modes.
 # Sets the global COMMON_ARGS array.
 # ---------------------------------------------------------------------------
 build_common_args() {
+  # Pick up any edits made to ~/.zshenv since this terminal was opened.
+  refresh_referenced_host_vars
+
   # Clear auth-mode variables before sourcing .env so that each project's
   # .env file fully controls which auth mode is used. Without this, host
   # env vars (e.g., ANTHROPIC_VERTEX_PROJECT_ID from ~/.zshenv for a work
