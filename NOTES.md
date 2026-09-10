@@ -110,12 +110,11 @@ The `claude-dev.sh` script supports three launch modes:
 3. **Multiple paths** — `claude-dev ~/proj/fe ~/proj/be` mounts each as
    `/workspace/<dirname>` (e.g. `/workspace/fe`, `/workspace/be`)
 
-Multi-project mode bypasses `compose.yaml` and calls `podman run` directly
-because compose doesn't support dynamic volume lists. Single-project mode
-also uses `podman run` directly for consistency.
-
-The compose.yaml is still useful as documentation and for `podman-compose`
-users who want to invoke it directly.
+All modes call `podman run` directly. There was once a `compose.yaml`, but
+compose can't express dynamic volume lists for multi-project mode, so nothing
+ever invoked it. It was removed in the LiteLLM gateway migration (it still
+hardcoded `CLAUDE_CODE_USE_VERTEX: "1"`, which would have been a trap for
+anyone who ran it by hand).
 
 ### Chromium in Containers on ARM64 (2026-02-24)
 
@@ -290,12 +289,12 @@ configuration the container was originally created with.
 | File/Dir | Purpose | Committed? |
 |----------|---------|------------|
 | `Containerfile` | Container image definition (node:20 + claude code + playwright) | Yes |
-| `compose.yaml` | Service definition, volumes, env wiring | Yes |
 | `.env.example` | Template for secrets | Yes |
 | `.env` | Actual secrets | No (gitignored) |
 | `mosh` | Setup and launcher script | Yes |
 | `config/` | Repo-managed config files, synced into container at launch | Yes |
 | `config/settings.json` | YOLO permissions, denied WebSearch | Yes |
+| `config/launch.sh` | Runs inside the container: syncs config, then starts Claude | Yes |
 | `config/claude.json` | User-level config baseline (autoUpdates, etc.) | Yes |
 | `config/mcp.json` | MCP server definitions | Yes |
 | `config/CLAUDE.md` | Container-specific global preferences | Yes |

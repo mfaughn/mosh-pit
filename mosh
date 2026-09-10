@@ -33,7 +33,6 @@ done
 SCRIPT_DIR="$(cd "$(dirname "$_src")" && pwd)"
 IMAGE_NAME="${CLAUDE_DEV_IMAGE:-claude-dev:latest}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$SCRIPT_DIR/config}"
-COMPOSE_FILE="$SCRIPT_DIR/compose.yaml"
 ENV_FILE="$SCRIPT_DIR/.env"
 
 # Version tracking — used to detect stale containers on resume.
@@ -46,7 +45,10 @@ ENV_FILE="$SCRIPT_DIR/.env"
 #       Min compat 1: containers without named volumes (bind mount era) are blocked.
 #   2 — Shared OAuth credentials volume (mosh-oauth-creds). Auth once, reuse
 #       across all projects. Isolate auth-mode env vars from host environment.
-MOSH_VERSION=2
+#   3 — Migrated from Vertex AI to an API gateway (ANTHROPIC_BASE_URL + tier
+#       aliases). Auth env vars are baked in at container creation, so existing
+#       containers must be recreated with 'mosh fresh' to pick up the change.
+MOSH_VERSION=3
 MOSH_MIN_COMPAT=1
 
 # ---------------------------------------------------------------------------
@@ -141,7 +143,10 @@ build_common_args() {
   # env vars (e.g., ANTHROPIC_VERTEX_PROJECT_ID from ~/.zshenv for a work
   # project) bleed through and override the intended auth for unrelated
   # projects that leave these commented out in .env.
-  unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_API_KEY CLOUD_ML_REGION 2>/dev/null || true
+  # CLAUDE_CODE_USE_VERTEX is included so a leftover global "=1" from the old
+  # Vertex setup cannot survive into a project that has migrated to a gateway.
+  unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_API_KEY CLOUD_ML_REGION \
+        CLAUDE_CODE_USE_VERTEX 2>/dev/null || true
 
   # Source .env to detect auth mode and expand $VAR references using the
   # host environment (e.g., $GITHUB_TOKEN from ~/.zshenv).
@@ -201,9 +206,16 @@ build_common_args() {
       -v "$gcloud_dir:/home/claude/.config/gcloud:ro,z"
     )
     info "Auth: Vertex AI (project: $ANTHROPIC_VERTEX_PROJECT_ID)"
+  elif [[ -n "${ANTHROPIC_API_KEY:-}" && -n "${ANTHROPIC_BASE_URL:-}" ]]; then
+    # Gateway mode (e.g. LiteLLM): key and base URL both come via --env-file.
+    info "Auth: API gateway ($ANTHROPIC_BASE_URL)"
   elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
-    # Direct API key mode: key is passed via --env-file, nothing else needed
-    info "Auth: Anthropic API key"
+    # Direct API key mode: key is passed via --env-file, nothing else needed.
+    # Warn loudly if this looks like a gateway key that lost its base URL —
+    # otherwise the key is sent straight to api.anthropic.com and fails.
+    info "Auth: Anthropic API key (direct to api.anthropic.com)"
+    warn "ANTHROPIC_BASE_URL is not set. If this key belongs to a gateway,"
+    warn "export ANTHROPIC_BASE_URL in ~/.zshenv — otherwise requests will fail."
   else
     # OAuth mode: Claude Code handles auth via browser login
     info "Auth: OAuth (Claude Pro/Max)"
@@ -228,7 +240,8 @@ cmd_setup() {
       warn ".env created from .env.example."
       warn "  $ENV_FILE"
       warn "OAuth users (Claude Pro/Max): leave the keys commented out and re-run setup."
-      warn "API key users: set ANTHROPIC_API_KEY or ANTHROPIC_VERTEX_PROJECT_ID, then re-run setup."
+      warn "Gateway/API key users: set ANTHROPIC_API_KEY (plus ANTHROPIC_BASE_URL"
+      warn "for a gateway) in ~/.zshenv, then re-run setup."
       exit 0
     else
       error ".env.example not found alongside this script. Cannot continue."
@@ -238,10 +251,15 @@ cmd_setup() {
 
   # 2. Source .env to check required vars (clear auth vars first to prevent
   #    host env from overriding the project's intended auth mode).
-  unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_API_KEY CLOUD_ML_REGION 2>/dev/null || true
+  # CLAUDE_CODE_USE_VERTEX is included so a leftover global "=1" from the old
+  # Vertex setup cannot survive into a project that has migrated to a gateway.
+  unset ANTHROPIC_VERTEX_PROJECT_ID ANTHROPIC_API_KEY CLOUD_ML_REGION \
+        CLAUDE_CODE_USE_VERTEX 2>/dev/null || true
   set -a; source "$ENV_FILE"; set +a
 
-  if [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+  if [[ -n "${ANTHROPIC_API_KEY:-}" && -n "${ANTHROPIC_BASE_URL:-}" ]]; then
+    info "Auth mode: API gateway ($ANTHROPIC_BASE_URL)"
+  elif [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
     info "Auth mode: Anthropic API key"
   elif [[ -n "${ANTHROPIC_VERTEX_PROJECT_ID:-}" ]]; then
     info "Auth mode: Vertex AI (project: $ANTHROPIC_VERTEX_PROJECT_ID)"
@@ -258,6 +276,13 @@ cmd_setup() {
 
   if [[ ! -f "$CLAUDE_CONFIG_DIR/settings.json" ]]; then
     error "settings.json not found in $CLAUDE_CONFIG_DIR"
+    exit 1
+  fi
+
+  # launch.sh runs inside the container on every launch; without it, the
+  # container starts but Claude never does.
+  if [[ ! -f "$CLAUDE_CONFIG_DIR/launch.sh" ]]; then
+    error "launch.sh not found in $CLAUDE_CONFIG_DIR"
     exit 1
   fi
 
@@ -350,162 +375,10 @@ cmd_launch() {
   # Each container gets its own volume so projects don't share OAuth tokens.
   local claude_home_vol="${container_name}-claude-home"
 
-  # Snippet run inside the container before launching Claude.
-  # 1. Syncs config files from the read-only repo mount (/mosh-config) into the
-  #    writable ~/.claude volume. Credentials (.credentials.json) are never touched.
-  # 2. Injects MCP server config into ~/.claude.json (which Claude overwrites on
-  #    exit, so we re-inject on every launch). Credentials (e.g. OPENBRAIN_MCP_KEY)
-  #    come from the container environment via --env-file.
-  local SYNC_AND_LAUNCH
-  SYNC_AND_LAUNCH='
-    stty sane
-    export PATH="$HOME/.local/bin:$PATH"
-    mkdir -p ~/.claude
-    for f in settings.json CLAUDE.md mcp.json statusline.sh; do
-      [ -f "/mosh-config/$f" ] && cp "/mosh-config/$f" "$HOME/.claude/$f" 2>/dev/null || true
-    done
-    [ -f "$HOME/.claude/statusline.sh" ] && chmod +x "$HOME/.claude/statusline.sh"
-    for d in agents templates uadf; do
-      [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
-    done
-    # Sync ~/.claude.json from config/claude.json base + MCP credential injection.
-    # Start with config/claude.json (has theme, hasCompletedOnboarding, etc.),
-    # merge in any existing ~/.claude.json state, then re-inject MCP servers
-    # (Claude Code strips mcpServers on exit, so we re-add every launch).
-    python3 - <<'"'"'PYEOF'"'"'
-import glob, json, os
-base_path = "/mosh-config/claude.json"
-mcp_path = "/mosh-config/mcp.json"
-claude_path = os.path.expanduser("~/.claude.json")
-# Start from base config (theme, onboarding, etc.)
-try:
-    with open(base_path) as f:
-        base = json.load(f)
-except Exception:
-    base = {}
-# Merge existing ~/.claude.json on top (preserves runtime state)
-try:
-    with open(claude_path) as f:
-        existing = json.load(f)
-except Exception:
-    existing = {}
-config = {**base, **existing}
-# Re-apply base settings that should always win (Claude Code may overwrite these)
-for key in ("theme", "hasCompletedOnboarding", "autoUpdates"):
-    if key in base:
-        config[key] = base[key]
-# Load MCP servers from mcp.json and fill in credentials
-try:
-    with open(mcp_path) as f:
-        mcp = json.load(f)
-except Exception:
-    mcp = {}
-servers = mcp.get("mcpServers", {})
-if "open-brain" in servers:
-    key = os.environ.get("OPENBRAIN_MCP_KEY", "")
-    if key:
-        servers["open-brain"]["headers"]["x-brain-key"] = key
-    else:
-        del servers["open-brain"]
-# Playwright MCP is opt-in per project — toggle with `mosh playwright on`.
-# Spawning chromium for every project that does not need a browser is wasted
-# overhead and another startup that can fail.
-if "playwright" in servers:
-    if not os.path.exists(os.path.expanduser("~/.claude/.playwright-enabled")):
-        del servers["playwright"]
-    else:
-        # Resolve the chromium headless_shell binary dynamically. Playwright
-        # revs the bundled Chromium version, so a hardcoded path goes stale
-        # every few months and Playwright MCP fails to start.
-        shells = sorted(glob.glob(
-            "/ms-playwright/chromium_headless_shell-*/chrome-linux/headless_shell"
-        ))
-        if shells:
-            args = servers["playwright"].setdefault("args", [])
-            if "--executable-path" not in args:
-                args.extend(["--executable-path", shells[-1]])
-config["mcpServers"] = servers
-with open(claude_path, "w") as f:
-    json.dump(config, f, indent=2)
-PYEOF
-    # Inject the destructive_command_guard PreToolUse hook into settings.json
-    # if the per-project sentinel ~/.claude/.dcg-enabled exists. Toggle with
-    # `mosh dcg on` / `mosh dcg off` from the host.
-    python3 - <<'"'"'PYEOF'"'"'
-import json, os
-sentinel = os.path.expanduser("~/.claude/.dcg-enabled")
-if os.path.exists(sentinel):
-    settings_path = os.path.expanduser("~/.claude/settings.json")
-    try:
-        with open(settings_path) as f:
-            settings = json.load(f)
-    except Exception:
-        settings = {}
-    pre = settings.setdefault("hooks", {}).setdefault("PreToolUse", [])
-    has_dcg = any(
-        h.get("matcher") == "Bash"
-        and any(c.get("command") == "dcg" for c in h.get("hooks", []))
-        for h in pre
-    )
-    if not has_dcg:
-        pre.append({
-            "matcher": "Bash",
-            "hooks": [{"type": "command", "command": "dcg"}],
-        })
-        with open(settings_path, "w") as f:
-            json.dump(settings, f, indent=2)
-PYEOF
-    # Seed OAuth credentials from the shared volume if this project does not
-    # have its own yet. This lets you authenticate once and reuse across all
-    # mosh projects on this machine.
-    if [ -f /home/claude/.oauth-creds/.credentials.json ] && [ ! -f ~/.claude/.credentials.json ]; then
-      cp /home/claude/.oauth-creds/.credentials.json ~/.claude/.credentials.json
-      echo -e "\033[0;32m[mosh]\033[0m OAuth credentials loaded from shared store"
-    fi
-    # Configure git to authenticate with GitHub over HTTPS using a personal
-    # access token. Also rewrite SSH remote URLs to HTTPS so cloned repos
-    # that use git@github.com: work without SSH keys in the container.
-    # This only touches ~/.gitconfig (in the named volume) — host repos are
-    # never modified.
-    # Global gitignore — prevents accidentally committing common artifacts
-    if [ -f "/mosh-config/gitignore_global" ]; then
-      cp "/mosh-config/gitignore_global" "$HOME/.gitignore_global"
-      git config --global core.excludesfile "$HOME/.gitignore_global"
-    fi
-    if [ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
-      git config --global credential.helper "$HOME/.git-credential-helper"
-      git config --global url."https://github.com/".insteadOf "git@github.com:"
-    fi
-    # Resume last session if available (unless MOSH_NEW_SESSION is set)
-    RESUME_FILE="$HOME/.claude/last-session-id"
-    CLAUDE_ARGS="--dangerously-skip-permissions"
-    if [ "${MOSH_NEW_SESSION:-0}" != "1" ] && [ -f "$RESUME_FILE" ]; then
-      SESSION_ID=$(cat "$RESUME_FILE")
-      if [ -n "$SESSION_ID" ]; then
-        CLAUDE_ARGS="$CLAUDE_ARGS --resume $SESSION_ID"
-        echo -e "\033[0;32m[mosh]\033[0m Resuming session: $SESSION_ID"
-      fi
-    fi
-    claude $CLAUDE_ARGS
-    CLAUDE_EXIT=$?
-    # If resume failed, tell the user
-    if [ $CLAUDE_EXIT -ne 0 ] && echo "$CLAUDE_ARGS" | grep -q -- "--resume"; then
-      echo ""
-      echo -e "\033[0;31m[mosh] ERROR:\033[0m Session resume failed (exit code $CLAUDE_EXIT)."
-      echo -e "\033[0;31m[mosh]\033[0m The saved session may be expired or corrupted."
-      echo -e "\033[0;31m[mosh]\033[0m Run \033[1;33mmosh new\033[0m to start a fresh session."
-      rm -f "$RESUME_FILE"
-    fi
-    # Persist OAuth credentials to shared volume so other projects can reuse them.
-    if [ -f ~/.claude/.credentials.json ]; then
-      cp ~/.claude/.credentials.json /home/claude/.oauth-creds/.credentials.json
-    fi
-    # Save session ID for next resume
-    NEWEST=$(ls -t "$HOME/.claude/projects/-workspace/"*.jsonl 2>/dev/null | head -1)
-    if [ -n "${NEWEST:-}" ]; then
-      basename "$NEWEST" .jsonl > "$RESUME_FILE"
-    fi
-  '
+  # The config sync + Claude launch logic lives in config/launch.sh, which is
+  # mounted read-only at /mosh-config/launch.sh. Keeping it in a real file
+  # (rather than an inline string) means shellcheck and editors can see it, and
+  # `ps` shows one readable line instead of the whole script.
 
   # Check if a stopped container with this name already exists.
   if $RUNTIME container exists "$container_name" 2>/dev/null; then
@@ -562,7 +435,7 @@ PYEOF
     info "Press Ctrl+C or type /exit to quit."
     echo ""
     $RUNTIME start "$container_name"
-    $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash -c "$SYNC_AND_LAUNCH"
+    $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash /mosh-config/launch.sh
     $RUNTIME stop "$container_name" 2>/dev/null || true
     return
   fi
@@ -667,7 +540,7 @@ PYEOF
 
   info "Press Ctrl+C or type /exit to quit."
   echo ""
-  $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash -c "$SYNC_AND_LAUNCH"
+  $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash /mosh-config/launch.sh
   $RUNTIME stop "$container_name" 2>/dev/null || true
   rm -f "${RESOLVED_ENV_FILE:-}"
 }
@@ -970,8 +843,10 @@ Launch modes:
   $(basename "$0") ~/proj/fe ~/proj/be      Mount multiple as /workspace/fe, /workspace/be
 
 Environment variables (set in .env):
-  ANTHROPIC_API_KEY             Direct Anthropic API key (option A)
-  ANTHROPIC_VERTEX_PROJECT_ID   GCP project with Vertex AI (option B)
+  ANTHROPIC_API_KEY             Anthropic or gateway API key
+  ANTHROPIC_BASE_URL            API gateway URL (e.g. LiteLLM); unset = Anthropic
+  ANTHROPIC_DEFAULT_OPUS_MODEL  What "opus" resolves to (also _SONNET_, _HAIKU_)
+  ANTHROPIC_VERTEX_PROJECT_ID   GCP project with Vertex AI (legacy)
   CLOUD_ML_REGION               Vertex AI region (default: global)
   CLAUDE_CONFIG_DIR             Container Claude config (default: ./config in repo)
   GCLOUD_CONFIG_DIR             gcloud config path (default: ~/.config/gcloud)
