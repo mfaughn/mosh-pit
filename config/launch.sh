@@ -116,6 +116,23 @@ if "playwright" in servers:
             if "--executable-path" not in args:
                 args.extend(["--executable-path", shells[-1]])
 config["mcpServers"] = servers
+# Pre-approve the gateway API key so Claude Code does not show its
+# "Detected a custom API key in your environment" prompt the first time a
+# project runs. The app keys the answer on the last 20 characters of the key
+# and stores it here; seeding it means a new project volume never asks.
+# Computed at launch from the environment so no key material is committed.
+api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+if api_key:
+    tail = api_key[-20:]
+    responses = config.setdefault("customApiKeyResponses", {})
+    approved = responses.setdefault("approved", [])
+    rejected = responses.setdefault("rejected", [])
+    if tail not in approved:
+        approved.append(tail)
+    # A stale "No" for this same key would otherwise leave the container with
+    # no working auth, since the key can only come from .env in the first place.
+    if tail in rejected:
+        rejected.remove(tail)
 with open(claude_path, "w") as f:
     json.dump(config, f, indent=2)
 PYEOF
