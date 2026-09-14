@@ -914,7 +914,8 @@ Launch modes:
 Environment variables (set in .env):
   ANTHROPIC_API_KEY             Anthropic or gateway API key
   ANTHROPIC_BASE_URL            API gateway URL (e.g. LiteLLM); unset = Anthropic
-  ANTHROPIC_DEFAULT_OPUS_MODEL  What "opus" resolves to (also _SONNET_, _HAIKU_)
+  ANTHROPIC_DEFAULT_OPUS_MODEL  What "opus" resolves to (also _SONNET_, _HAIKU_,
+                                _FABLE_ — _FABLE_ also unhides Fable in /model)
   ANTHROPIC_VERTEX_PROJECT_ID   GCP project with Vertex AI (legacy)
   CLOUD_ML_REGION               Vertex AI region (default: global)
   CLAUDE_CONFIG_DIR             Container Claude config (default: ./config in repo)
