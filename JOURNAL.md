@@ -288,3 +288,43 @@ Commit: `4d09ade` (playwright opt-in), then a follow-up commit dropping it from 
 - **`ANTHROPIC_MODEL` and `ANTHROPIC_DEFAULT_*_MODEL` do different jobs.** The former pins one model; the latter three define what "opus"/"sonnet"/"haiku" resolve to, which is what `/model`, `/fast`, `opusplan` and subagent selection depend on. A stale pin silently defeats the aliases. This caused confusion three separate times in one day, hence the unset.
 
 - **`config/settings.json` is committed**, so the API key can never live there. The key is referenced from `.env` as `$NIST_LITELLM_KEY` — a name distinct from `ANTHROPIC_API_KEY` specifically because `mosh` unsets `ANTHROPIC_API_KEY` before reading `.env`; a self-reference would resolve to empty. The real value lives in `~/.zshenv`, which also serves host-native Claude Code, so there is one source of truth for both.
+
+## Session Handoff — 2026-09-14 18:38
+
+### Completed This Session
+
+- **Stopped Claude Code asking to approve the gateway API key on every new project**: the prompt ("Detected a custom API key in your environment", with *No* marked recommended) persists its answer in `~/.claude.json` under `customApiKeyResponses.approved`, keyed on the **last 20 characters** of the key. That file lives in the per-project named volume and is seeded from `config/claude.json`, which carries no approval — so each new project asked again. `config/launch.sh` now seeds the approval during its existing `claude.json` sync, computed at launch from `$ANTHROPIC_API_KEY` so no key material is committed. A stale rejection of the same key is cleared, since the key can only come from `.env` and a "No" leaves the container with no working auth rather than expressing a preference. Commit: `e51e029`.
+
+- **Made Fable selectable in `/model`**: added `ANTHROPIC_DEFAULT_FABLE_MODEL` to the tier aliases. Documented in `.env.example` and `mosh --help`; the `${NAME:-}` reference line lives in the gitignored `.env`. Commit: `25db462`.
+
+- **Resolved the long-standing UADF naming carry-forward**: user's call — `/uadf:uadf-init` is a nothingburger, not worth changing. Deliberately dropped, not deferred. Do not re-raise.
+
+### Current State
+- Branch: `main`
+- Last checkpoint: `25db462` — Carry ANTHROPIC_DEFAULT_FABLE_MODEL into containers
+- Tests: N/A (no test suite). `bash -n` and shellcheck clean on `mosh` and `config/launch.sh` (same 3 pre-existing infos as HEAD, no new findings); the launcher's API-key injection was simulated against six scenarios — fresh volume, repeat launches, stale rejection, rotated key, absent key, and preservation of existing runtime state.
+- All changes pushed to remote.
+- Verified live by the user: Fable appears in `/model` and is selectable after `mosh fresh`.
+
+### Next Steps
+1. Nothing outstanding in this repo. Fable is blocked upstream (below), not by anything here.
+2. Still open from the prior session: exercise `/model sonnet`, `/fast` and a `web-researcher` subagent call to prove the Sonnet and Haiku aliases resolve. Opus and Fable are now both confirmed; a typo in the other two stays invisible until something actually routes to them.
+3. Still open from the prior session: `mosh fresh` on the remaining project containers to pick up the gateway env — now also required for the API-key approval and Fable.
+
+### Open Questions / Blockers
+
+- **Fable returns HTTP 429 from the gateway.** Not a local problem, and not LiteLLM's budget either — the upstream refusal is a Google Cloud one:
+  `Quota exceeded for aiplatform.googleapis.com/us_multi_region_online_prediction_requests_per_base_model with base model: anthropic-claude-fable` / `RESOURCE_EXHAUSTED`.
+  Three back-to-back attempts all failed, which leans toward quota provisioned at or near zero rather than momentary contention — though rapid retries cannot fully separate the two, since a per-minute limit fails all three either way. Opus 5 returned HTTP 200 through the same key and gateway in the same test, so the path is healthy. Fixing it requires a Vertex AI quota-increase request for base model `anthropic-claude-fable` in the US multi-region, filed by whoever owns the GCP project behind `trill.nist.gov`. **Leave the alias configured** — Fable starts working the day the quota is raised, with no change on this side.
+
+### Relevant Context — things that cost time this session
+
+- **The NIST gateway is itself backed by Vertex AI.** Responses come back with `msg_vrtx_...` ids. The migration in `639bace` moved off *direct* Vertex auth, but Vertex is still underneath — which is why a Google quota error surfaces through an Anthropic-shaped API. Expect Google-flavoured failures to keep appearing despite the gateway.
+
+- **Fable is gated differently from the other three tiers.** `isFableAvailable()` in the CLI runs an entitlement probe against the first-party API, which a gateway cannot answer, so Fable is simply omitted from `/model` — no error, no hint. Every branch of that function short-circuits to true when `ANTHROPIC_DEFAULT_FABLE_MODEL` is set. The variable does a second job too: the family check looks for a leading `claude-fable-`, which the gateway's `itl-airms/`-prefixed id fails, so the alias is also what makes the CLI classify the model as Fable at all.
+
+- **The launcher's `${NAME:-}` scrape is what carries a host export across.** The `env -i` probe added in `5ae37be` reads variable *names* out of `.env`. A host export with no corresponding reference line in `.env` never reaches the container — which is exactly why Fable stayed hidden even though the host export had been set for some time. Adding a tier alias is therefore always a two-sided change: the export on the host, the reference line in `.env`.
+
+- **`.env` is gitignored**, so reference lines added there are local-only. `.env.example` is the sole record a fresh clone gets. Its example block had also drifted (it still showed `claude-opus-4-6` while the live alias was `claude-opus-5`); corrected this session.
+
+- **The error message for an unapproved API key is misleading.** Declining the prompt leaves the container with no auth at all, since `mosh` unsets host `ANTHROPIC_API_KEY` and `.env` is the only source. "No" is never the right answer in this setup, despite being the recommended option.
