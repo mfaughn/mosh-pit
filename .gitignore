@@ -36,6 +36,3 @@ config/tasks/
 config/teams/
 config/todos/
 config/history.jsonl
-
-# Claude Code rewrites claude.json on exit; mcp.json is the source of truth.
-# claude.json is committed with a clean baseline but runtime changes are ignored.
