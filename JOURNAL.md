@@ -444,8 +444,10 @@ have no ports until recreated. They should show **no** `Serving:` line.
   curated-vs-contiguous ports, and loopback-vs-LAN with the alternatives considered.
 
 ### Current State
-- Branch: `feat/port-allocation` (**not merged, nothing committed** — all changes are
-  working-tree only; `/workspace` is a host bind mount so they survive `mosh fresh`).
+- Branch: `feat/port-allocation`. **[Corrected 2026-09-16 18:50: this entry originally
+  read "not merged, nothing committed". That was written minutes before the work was
+  actually committed — `a8e283f`, `83d1e79` and this journal update `b507e3a` all landed
+  at 14:30 the same day. The branch was merged to `main` later that day.]**
 - Files touched: `mosh`, `config/launch.sh`, `config/CLAUDE.md`, `README.md`,
   `.gitignore`, plus new `docs/adr/0001-per-container-host-port-allocation.md`.
 - `MOSH_VERSION` 3 → 4, with a version-history entry. Existing containers warn on
@@ -536,3 +538,139 @@ have no ports until recreated. They should show **no** `Serving:` line.
 
 - **The `.ports` lock is a `mkdir` mutex** with a trap on `EXIT INT TERM`. `mkdir` is
   atomic on both macOS and Linux. Verified with 20 parallel allocations.
+
+## Session Handoff — 2026-09-16 18:50
+
+### >>> START HERE — still unverified <<<
+
+The port feature is **merged to `main`**, but three checks from the previous handoff's
+checklist never ran. None blocks use of the feature; each is cheap to close
+opportunistically. Do not re-run Tests 1, 2, 4 or 5a — they passed this session.
+
+**Test 3 — `mosh fresh` preserves the slot.** From the mosh-pit project:
+
+```bash
+mosh ports          # note the slot
+```
+
+`/exit`, `mosh fresh`, then `mosh ports` from a *second* terminal (the first stays
+occupied until Claude exits, and exiting stops the container).
+**Pass:** same slot, same base. Already covered by last session's allocation harness
+(idempotent re-lookup), so this is real-environment confirmation, not new ground.
+
+**Test 5b — slot reclamation.** Delete a line from `.ports` whose container is gone,
+launch a brand-new project, confirm it claims the freed slot. Needs a container to
+actually be missing — run it the next time one genuinely goes away.
+
+**The `(stale — no container)` branch of `mosh ports list`.** Never executed: all four
+registered containers were active. Same precondition as Test 5b, so they close together.
+
+### Completed This Session
+
+- **Ran the port verification checklist. Four of five tests pass.**
+  - **Test 1 (ports publish and serve):** pass. Server on `0.0.0.0:$MOSH_PORT` in the
+    mosh-pit container, reachable at `http://localhost:20020` on the host.
+  - **Test 2 (no collision between projects):** pass — the property the whole design
+    exists for. `cc-v2ig` (20010) and `cc-mosh-pit` (20020) served simultaneously, each
+    its own files.
+  - **Test 4 (loopback trap is real):** pass. Bound to `127.0.0.1`, the host URL refuses.
+    Confirmed from inside the container that `127.0.0.1:3000` returns 200 while the
+    container's own IP (`10.88.0.24:3000`) refuses — podman forwards the published port
+    to the container's network interface, not its loopback. The `config/CLAUDE.md`
+    warning earns its place.
+  - **Test 5a (registry inspection):** pass. All four projects `active`, slots distinct
+    and sequential (0-3 → 20000/20010/20020/20030).
+  - **Test 3:** not run. See START HERE.
+
+- **Merged `feat/port-allocation` into `main`** (fast-forward `6b9377d..b507e3a`) and
+  pushed. Branch left in place, not deleted.
+
+- **Diagnosed why Fable showed a 200K context window** while Opus showed 1M, and
+  verified a fix end to end. Findings, in the order they matter:
+
+  - **The gateway is not the constraint.** Probed with deliberately oversized prompts —
+    these fail validation before inference, so they cost nothing. Real backend ceilings:
+    `claude-opus-5` 1M, `claude-fable-5-1` 1M, `claude-sonnet-5` 1M,
+    `claude-haiku-4-5` **200K**. Fable's 1M applies with or without the
+    `context-1m-2025-08-07` beta header.
+  - **The 200K was Claude Code's own accounting.** It sizes the window from an internal
+    model registry keyed on canonical names. A prefixed gateway ID (`itl-airms/…`) matches
+    nothing, so it falls into a path it labels `source: "unknown-model"` and assumes a
+    default window — then auto-compacts against that assumption.
+  - **`[1m]` is an internal identifier, never a wire value.** Claude Code carries the
+    model as `…claude-opus-5[1m]` for window accounting and display, and builds the HTTP
+    request from a separate `canonicalModel` field. The gateway **403s** the suffixed
+    string if sent literally, which is why the display name and the wire name differ.
+  - **Why Opus worked and Fable didn't:** the registry marks Opus 5 `supports_1m_suffix`,
+    so Claude Code appends `[1m]` itself. Fable 5.1 and Sonnet 5 are marked
+    `native_1m` *without* `supports_1m_suffix` — correct for a first-party ID, useless for
+    a prefixed one that never matches the entry.
+  - **Verified fix**, run end to end in this container:
+    `ANTHROPIC_DEFAULT_FABLE_MODEL='itl-airms/claude-fable-5-1[1m]' claude -p … --model fable`
+    returned `contextWindow: 1000000`, `canonicalModel: claude-fable-5-1`, HTTP 200.
+
+### Current State
+- Branch: `main`, clean, pushed. `feat/port-allocation` still exists at the same commit.
+- Last checkpoint: this journal entry.
+- Tests: no suite in this repo. Port feature verified manually — 4 of 5, see START HERE.
+- Fable is working again (no longer 429s); the quota block from prior sessions is gone.
+
+### Next Steps
+1. **Apply the Fable/Sonnet context fix** in `~/.zshenv` — not yet done:
+   ```bash
+   export ANTHROPIC_DEFAULT_FABLE_MODEL='itl-airms/claude-fable-5-1[1m]'
+   export ANTHROPIC_DEFAULT_SONNET_MODEL='itl-airms/claude-sonnet-5[1m]'
+   ```
+   Leave Haiku bare — its real ceiling *is* 200K, so a suffix would make Claude Code
+   believe 1M and skip compaction until the API hard-errors. Opus needs no change
+   (Claude Code adds the tag itself); add it only for explicitness.
+   Requires `mosh fresh` — the tier aliases enter via `--env-file` at `podman run`, and
+   the resume path (`mosh:733-734`) re-passes only `MOSH_PORT*` and `MOSH_NEW_SESSION`.
+   For the current session without a rebuild: `/model fable[1m]`.
+2. Carry-forward: exercise `/model sonnet`, `/fast` and a `web-researcher` subagent call
+   to prove those aliases resolve. Opus and Fable are now both confirmed working.
+3. Carry-forward: `mosh fresh` remaining project containers for the gateway env, the
+   API-key approval, Fable, and now ports.
+4. Consider deleting `feat/port-allocation` now that it is merged.
+
+### Open Questions / Blockers
+- None. The Fable 429/quota blocker from prior sessions has cleared.
+
+### Relevant Context — things worth not rediscovering
+
+- **`mosh fresh` is safe for session continuity.** `cmd_fresh` is `podman rm -f` followed
+  by `cmd_launch` (`mosh:954-980`) — it never touches the named volume, so `~/.claude`,
+  the session history and `last-session-id` survive and the relaunch resumes the same
+  conversation. Worth knowing before hesitating to run it.
+
+- **Don't trust the gateway's `/v1/models` for context windows.** It reports
+  `max_input_tokens: 200000` for *every* model, including Opus 5, which the oversized-prompt
+  probe disproves. It is the first place anyone would look and it is wrong. The probe is
+  the reliable method, and it is free: an over-limit prompt 400s at validation, unbilled,
+  and the error names the real ceiling.
+
+- **Output is capped at 64000 on the gateway** for Opus 5, Fable 5.1 and Sonnet 5 (Haiku
+  8192). That happens to equal Claude Code's own default, so it only bites if
+  `CLAUDE_CODE_MAX_OUTPUT_TOKENS` is raised above 64K expecting the models' 128K upper.
+
+- **Compaction is client-side and driven by the assumed window.** Claude Code computes
+  `effective_window` (clamped to the model window) and fires compaction at
+  `effective_window` minus a summary buffer. So a wrong window assumption doesn't merely
+  mislabel the UI — it discards context early. Relevant escape hatches:
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, `CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT`,
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Prefer the per-model `[1m]` tag over
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS`, which applies to whatever model is active and would
+  wrongly claim 1M for Haiku.
+
+- **A model switch re-resolves the window at runtime**, so `/model fable[1m]` widens the
+  current session without a restart. `/autocompact` is clamped to the model window and can
+  only lower it.
+
+- **Fable 5.1 cache reads are $0.25/MTok against $10/MTok fresh input** — a 40× spread, and
+  specific to 5.1 (plain Fable 5 has no such discount). Prompt-prefix stability is worth
+  far more on Fable than on Opus. Its thinking is also always on, so `effort` is the
+  spend lever, not context size.
+
+- **`pkill -f "http.server"` kills the shell running it**, because the pattern matches that
+  shell's own command line. Cost a test server and an exit-144 mystery this session. Use
+  a bracketed pattern (`'[h]ttp\.server'`) or kill by PID.
