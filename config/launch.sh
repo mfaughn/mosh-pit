@@ -189,6 +189,16 @@ if [ -n "${GITHUB_PERSONAL_ACCESS_TOKEN:-}" ]; then
   git config --global url."https://github.com/".insteadOf "git@github.com:"
 fi
 
+# Remind the user where this container is reachable. The host prints the full
+# map at launch, but on a new container that scrolls away behind the Claude Code
+# update, provisioning and plugin install, so repeat the essentials here — this
+# is the last thing on screen before the session starts.
+if [ -n "${MOSH_PORT_BASE:-}" ]; then
+  echo -e "\033[0;32m[mosh]\033[0m Serving: http://localhost:${MOSH_PORT_BASE} -> container :${MOSH_PORT:-3000}"
+  echo -e "\033[0;32m[mosh]\033[0m Container ports published: ${MOSH_PORTS:-}  (bind 0.0.0.0, not 127.0.0.1)"
+  echo -e "\033[0;32m[mosh]\033[0m Full map: run 'mosh ports' on the host."
+fi
+
 # Resume last session if available (unless MOSH_NEW_SESSION is set).
 RESUME_FILE="$HOME/.claude/last-session-id"
 CLAUDE_ARGS=(--dangerously-skip-permissions)

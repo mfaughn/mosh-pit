@@ -35,6 +35,30 @@ IMAGE_NAME="${CLAUDE_DEV_IMAGE:-claude-dev:latest}"
 CLAUDE_CONFIG_DIR="${CLAUDE_CONFIG_DIR:-$SCRIPT_DIR/config}"
 ENV_FILE="$SCRIPT_DIR/.env"
 
+# Host port allocation.
+#
+# Every container publishes the same set of container-side ports, but each
+# project gets a unique block of HOST ports so two running containers never
+# collide. A project's block is identified by its "slot" number:
+#
+#   host base = PORT_BASE + (slot * PORT_STRIDE)
+#
+# Slot assignments live in $PORTS_FILE (gitignored, host-local). The stride is
+# wider than the number of published ports on purpose: the spare ports let a
+# future entry be added to CONTAINER_PORTS without renumbering every existing
+# allocation.
+#
+# 20000-29999 is clear of both ephemeral port ranges (macOS 49152-65535, Linux
+# 32768-60999), so the OS will never hand one of these out to an outbound
+# socket, and clear of the container-side defaults listed below.
+PORTS_FILE="$SCRIPT_DIR/.ports"
+PORT_BASE=20000
+PORT_STRIDE=10
+# Container-side ports, in host-offset order: base+0 -> 3000, base+1 -> 4000, ...
+# These are the common dev-server defaults, so most tools need no --port flag.
+CONTAINER_PORTS=(3000 4000 5173 8000 8080 8888 9000)
+CONTAINER_PORT_LABELS=("node/next" "jekyll" "vite" "python http.server" "generic" "jupyter" "spare")
+
 # Version tracking — used to detect stale containers on resume.
 #   MOSH_VERSION:        Increment on every meaningful change to container setup.
 #   MOSH_MIN_COMPAT:     Increment when a change is breaking (e.g., mount layout).
@@ -48,7 +72,10 @@ ENV_FILE="$SCRIPT_DIR/.env"
 #   3 — Migrated from Vertex AI to an API gateway (ANTHROPIC_BASE_URL + tier
 #       aliases). Auth env vars are baked in at container creation, so existing
 #       containers must be recreated with 'mosh fresh' to pick up the change.
-MOSH_VERSION=3
+#   4 — Publish a per-project block of host ports (see PORTS_FILE above).
+#       Podman fixes port mappings at container-creation time, so existing
+#       containers must be recreated with 'mosh fresh' to gain ports.
+MOSH_VERSION=4
 MOSH_MIN_COMPAT=1
 
 # ---------------------------------------------------------------------------
@@ -115,6 +142,173 @@ container_name_from_dirs() {
   local sorted
   sorted=$(printf '%s\n' "${parts[@]}" | sort | tr '\n' '-' | sed 's/-$//')
   echo "cc-${sorted}"
+}
+
+# ---------------------------------------------------------------------------
+# Host port allocation.
+#
+# Each project gets a unique block of host ports so that two containers running
+# at the same time never collide. Container-side ports are identical in every
+# container (separate network namespaces make that safe); only the host side is
+# allocated per project.
+#
+# Slot assignments are recorded in $PORTS_FILE. The file is host-local and
+# gitignored, and is the first piece of shared host state mosh keeps — unlike
+# the dcg/playwright sentinels, which live inside a project's own volume, this
+# has to be global, because detecting a collision means seeing every project at
+# once.
+# ---------------------------------------------------------------------------
+
+# Create the registry with its header comment if it does not exist yet.
+# Creation is lazy rather than seeded in cmd_setup: setup exits early on a
+# first-ever run, and cmd_launch never calls it, so seeding there would miss
+# everyone who set mosh up before this feature existed.
+ports_registry_init() {
+  [[ -f "$PORTS_FILE" ]] && return 0
+  cat > "$PORTS_FILE" <<EOF
+# mosh host port allocations.
+#
+# host base = $PORT_BASE + (slot * $PORT_STRIDE)
+#
+# Each slot owns $PORT_STRIDE host ports, of which ${#CONTAINER_PORTS[@]} are published. The
+# spares exist so a future port can be added without renumbering the entries below.
+#
+#   mosh ports        Show this project's port map
+#   mosh ports list   Show every project's allocation
+#
+# To free a slot for reuse, delete its line. The next launch of a NEW project
+# claims the lowest unused slot. Editing the line of a container that already
+# exists has no effect until 'mosh fresh' recreates it, because podman fixes
+# port mappings at container-creation time.
+#
+# container                      slot
+EOF
+  # stderr: this function runs inside $(port_slot_for ...), whose stdout is
+  # the slot number.
+  info "Created port registry: $PORTS_FILE" >&2
+}
+
+# Echo the slot recorded for a container name, or nothing. Read-only.
+ports_lookup_slot() {
+  local name="$1"
+  [[ -f "$PORTS_FILE" ]] || return 0
+  awk -v n="$name" '!/^[[:space:]]*#/ && NF >= 2 && $1 == n { print $2; exit }' \
+    "$PORTS_FILE"
+}
+
+# Echo the lowest slot number not present in the registry. Taking the lowest
+# free slot (rather than max+1) is what makes hand-deleting a line actually
+# return that slot to the pool.
+ports_next_free_slot() {
+  local candidate=0 s
+  # Process substitution, not a pipe: a piped `while` runs in a subshell and
+  # `candidate` would not survive the loop.
+  while read -r s; do
+    if [[ "$s" == "$candidate" ]]; then
+      candidate=$((candidate + 1))
+    elif (( s > candidate )); then
+      break
+    fi
+  done < <(awk '!/^[[:space:]]*#/ && NF >= 2 { print $2 }' "$PORTS_FILE" | sort -n)
+  echo "$candidate"
+}
+
+# mkdir is atomic on both macOS and Linux, which makes it a usable mutex
+# between two mosh launches started in different terminals at the same time.
+ports_lock_acquire() {
+  local lock="${PORTS_FILE}.lock"
+  local waited=0
+  while ! mkdir "$lock" 2>/dev/null; do
+    if (( waited >= 50 )); then
+      warn "Removing stale port-registry lock: $lock" >&2
+      rm -rf "$lock"
+    fi
+    sleep 0.1
+    waited=$((waited + 1))
+  done
+  # Release on any exit too, so an interrupted launch cannot wedge the next one.
+  trap 'rm -rf "'"$lock"'"' EXIT INT TERM
+}
+
+ports_lock_release() {
+  rm -rf "${PORTS_FILE}.lock"
+  trap - EXIT INT TERM
+}
+
+# Echo the slot for a container, allocating and recording one if it has none.
+port_slot_for() {
+  local name="$1"
+  local slot fresh=0
+  local max=$(( (30000 - PORT_BASE) / PORT_STRIDE ))
+
+  ports_lock_acquire
+  ports_registry_init
+  slot="$(ports_lookup_slot "$name")"
+  if [[ -z "$slot" ]]; then
+    slot="$(ports_next_free_slot)"
+    fresh=1
+  fi
+
+  # Validate BEFORE recording. Writing first would leave an unusable line in the
+  # registry that every later launch would look up and refuse again.
+  if (( slot >= max )); then
+    ports_lock_release
+    error "Port registry is full — every slot below $max is taken."
+    error "Free one by deleting its line from $PORTS_FILE"
+    return 1
+  fi
+
+  if (( fresh )); then
+    printf '%-30s %s\n' "$name" "$slot" >> "$PORTS_FILE"
+  fi
+  ports_lock_release
+
+  echo "$slot"
+}
+
+port_base_for_slot() {
+  echo $((PORT_BASE + $1 * PORT_STRIDE))
+}
+
+# Emit "-p" and "127.0.0.1:<host>:<container>" on alternating lines, for the
+# caller to read into an args array. Loopback-only on purpose: these dev servers
+# have no authentication in front of them, so they should not reach the LAN.
+port_publish_args() {
+  local base i
+  base=$(port_base_for_slot "$1")
+  for i in "${!CONTAINER_PORTS[@]}"; do
+    echo "-p"
+    echo "127.0.0.1:$((base + i)):${CONTAINER_PORTS[$i]}"
+  done
+}
+
+# Human-readable map, shared by the launch banner and `mosh ports`.
+port_table() {
+  local base i
+  base=$(port_base_for_slot "$1")
+  for i in "${!CONTAINER_PORTS[@]}"; do
+    printf '  http://localhost:%-5s ->  container :%-5s %s\n' \
+      "$((base + i))" "${CONTAINER_PORTS[$i]}" "${CONTAINER_PORT_LABELS[$i]}"
+  done
+}
+
+# Warn if something outside mosh already holds part of this project's block.
+# Advisory only — podman fails loudly by itself if a bind genuinely cannot be
+# made, and this check cannot rule out a port being taken a moment later.
+ports_preflight() {
+  local base i busy=()
+  base=$(port_base_for_slot "$1")
+  command -v nc >/dev/null 2>&1 || return 0
+  for i in "${!CONTAINER_PORTS[@]}"; do
+    if nc -z 127.0.0.1 $((base + i)) >/dev/null 2>&1; then
+      busy+=("$((base + i))")
+    fi
+  done
+  if (( ${#busy[@]} > 0 )); then
+    warn "Host port(s) already in use: ${busy[*]}"
+    warn "Something outside mosh is listening inside this project's block."
+    warn "Move the project to a free slot by editing $PORTS_FILE, then 'mosh fresh'."
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -444,6 +638,20 @@ cmd_launch() {
   # Each container gets its own volume so projects don't share OAuth tokens.
   local claude_home_vol="${container_name}-claude-home"
 
+  # Host port block for this project. Resolved before either branch below so
+  # that a resumed container reports the same map a new one publishes.
+  local port_slot port_base port_list _parg
+  port_slot=$(port_slot_for "$container_name")
+  port_base=$(port_base_for_slot "$port_slot")
+  port_list=$(IFS=,; echo "${CONTAINER_PORTS[*]}")
+  # Passed on the `exec` rather than in COMMON_ARGS: COMMON_ARGS only applies to
+  # containers being created, whereas exec-time -e also reaches resumed ones.
+  local port_env=(
+    -e "MOSH_PORTS=$port_list"
+    -e "MOSH_PORT=${CONTAINER_PORTS[0]}"
+    -e "MOSH_PORT_BASE=$port_base"
+  )
+
   # The config sync + Claude launch logic lives in config/launch.sh, which is
   # mounted read-only at /mosh-config/launch.sh. Keeping it in a real file
   # (rather than an inline string) means shellcheck and editors can see it, and
@@ -501,10 +709,29 @@ cmd_launch() {
     fi
 
     info "Resuming existing container: $container_name"
+
+    # Only advertise URLs the container can actually serve. A container created
+    # before v4 has no published ports, and printing its would-be map would just
+    # produce connection-refused surprises. Gate on the version label read above
+    # rather than inspecting port bindings: it is already in hand, and it cannot
+    # misreport because of a runtime-specific inspect field name.
+    if (( container_version >= 4 )); then
+      info "Ports (slot $port_slot):"
+      port_table "$port_slot"
+    else
+      warn "This container publishes no ports. Run 'mosh fresh' to add them."
+      # Blank the port env to match. Handing a pre-v4 container a populated
+      # $MOSH_PORTS would make the in-container banner and config/CLAUDE.md
+      # advertise URLs that refuse connections — contradicting the warning above.
+      # Kept as a one-element array rather than (), because "${empty[@]}" under
+      # `set -u` is an error in bash 3.2, which is what /bin/bash is on macOS.
+      port_env=(-e "MOSH_PORTS=")
+    fi
+
     info "Press Ctrl+C or type /exit to quit."
     echo ""
     $RUNTIME start "$container_name"
-    $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash /mosh-config/launch.sh
+    $RUNTIME exec -it "${port_env[@]}" -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash /mosh-config/launch.sh
     $RUNTIME stop "$container_name" 2>/dev/null || true
     return
   fi
@@ -518,7 +745,18 @@ cmd_launch() {
   # Shared OAuth credentials volume — authenticate once, use across all projects.
   # Credentials are seeded from here into new containers and saved back on exit.
   COMMON_ARGS+=(--mount "type=volume,source=mosh-oauth-creds,target=/home/claude/.oauth-creds")
+
+  # Publish this project's host port block. Podman fixes port mappings at
+  # creation time, which is why the whole block goes on now whether or not it
+  # gets used — adding one later would mean recreating the container.
+  ports_preflight "$port_slot"
+  while IFS= read -r _parg; do
+    COMMON_ARGS+=("$_parg")
+  done < <(port_publish_args "$port_slot")
+
   info "Container: $container_name (new)"
+  info "Ports (slot $port_slot):"
+  port_table "$port_slot"
 
   if [[ ${#resolved[@]} -eq 1 ]]; then
     # --- Single project: mount at /workspace root ---
@@ -609,7 +847,7 @@ cmd_launch() {
 
   info "Press Ctrl+C or type /exit to quit."
   echo ""
-  $RUNTIME exec -it -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash /mosh-config/launch.sh
+  $RUNTIME exec -it "${port_env[@]}" -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash /mosh-config/launch.sh
   $RUNTIME stop "$container_name" 2>/dev/null || true
   rm -f "${RESOLVED_ENV_FILE:-}"
 }
@@ -885,6 +1123,65 @@ cmd_playwright() {
 }
 
 # ---------------------------------------------------------------------------
+# ports: show this project's host port block, or every project's.
+#
+# Read-only. Allocation happens at launch, never here — inspecting the map
+# should not have the side effect of claiming a slot for a project that may
+# never be launched.
+#
+# Usage:
+#   mosh ports         Show this project's port map
+#   mosh ports list    Show every recorded allocation
+# ---------------------------------------------------------------------------
+cmd_ports() {
+  local subcmd="${1:-show}"
+
+  case "$subcmd" in
+    show|"")
+      local container_name slot
+      container_name=$(container_name_from_dirs)
+      slot=$(ports_lookup_slot "$container_name")
+      if [[ -z "$slot" ]]; then
+        info "$container_name has no port allocation yet."
+        info "One is assigned automatically the next time you run 'mosh' here."
+        return 0
+      fi
+      info "$container_name — slot $slot, host base $(port_base_for_slot "$slot")"
+      port_table "$slot"
+      ;;
+    list)
+      if [[ ! -f "$PORTS_FILE" ]]; then
+        info "No allocations yet ($PORTS_FILE does not exist)."
+        return 0
+      fi
+      info "Port allocations ($PORTS_FILE):"
+      printf '  %-30s %-6s %-8s %s\n' "CONTAINER" "SLOT" "BASE" "STATUS"
+      local name slot status
+      while read -r name slot _; do
+        [[ -z "$name" ]] && continue
+        case "$name" in \#*) continue ;; esac
+        [[ -z "$slot" ]] && continue
+        if $RUNTIME container exists "$name" 2>/dev/null; then
+          status="active"
+        else
+          status="(stale — no container)"
+        fi
+        printf '  %-30s %-6s %-8s %s\n' \
+          "$name" "$slot" "$(port_base_for_slot "$slot")" "$status"
+      done < "$PORTS_FILE"
+      echo ""
+      info "To free a slot for reuse, delete its line from $PORTS_FILE."
+      info "A slot change only takes effect after 'mosh fresh' recreates the container."
+      ;;
+    *)
+      error "Unknown ports subcommand: $subcmd"
+      error "Usage: $(basename "$0") ports [list]"
+      exit 1
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # help
 # ---------------------------------------------------------------------------
 cmd_help() {
@@ -904,6 +1201,7 @@ Commands:
   update    Update Claude Code (npm) inside existing container without launching
   dcg        Toggle the destructive-command-guard hook (on|off|status)
   playwright Toggle the Playwright MCP server (on|off|status)
+  ports      Show this project's host port map (or 'ports list' for all)
   help       Show this help
 
 Launch modes:
@@ -949,6 +1247,7 @@ case "${1:-}" in
   update)         shift; cmd_update "$@" ;;
   dcg)            shift; cmd_dcg "$@" ;;
   playwright)     shift; cmd_playwright "$@" ;;
+  ports)          shift; cmd_ports "$@" ;;
   new)            shift; MOSH_NEW_SESSION=1 cmd_launch "$@" ;;
   help|-h|--help) cmd_help ;;
   "")             cmd_launch ;;

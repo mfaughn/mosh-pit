@@ -1,6 +1,10 @@
 # Secrets
 .env
 
+# Host port allocations (host-local state, see `mosh ports`)
+.ports
+.ports.lock
+
 # Claude Code local project data (this repo's own .claude/)
 .claude/
 

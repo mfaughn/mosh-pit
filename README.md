@@ -40,6 +40,10 @@ mosh provision                Re-run provision script in existing container
 mosh save [tag]               Snapshot container as image (default tag: "backup")
 mosh snapshots                List saved snapshots for current project
 mosh restore [tag]            Restore container from a saved snapshot
+mosh ports                    Show this project's host port map
+mosh ports list               Show every project's port allocation
+mosh dcg [on|off|status]      Toggle the destructive-command-guard hook
+mosh playwright [on|off]      Toggle the Playwright MCP server
 mosh help                     Show help
 ```
 
@@ -86,6 +90,48 @@ environment is not leaked into containers.
 **Important**: env vars are baked in at container creation time. If you
 change `.env`, run `mosh fresh` for the changes to take effect. Resuming
 an existing container (`mosh`) uses the original env.
+
+## Ports
+
+Every container publishes a block of host ports so you can view what it serves at
+`http://localhost:<port>` on the host. Each project gets a **different** host
+block, so several containers can serve at the same time without colliding. The
+container-side ports are the same everywhere:
+
+| Host | Container | Typical use |
+|---|---|---|
+| base+0 | 3000 | node / next |
+| base+1 | 4000 | jekyll |
+| base+2 | 5173 | vite |
+| base+3 | 8000 | python http.server |
+| base+4 | 8080 | generic |
+| base+5 | 8888 | jupyter |
+| base+6 | 9000 | spare |
+
+where `base = 20000 + (slot * 10)`. Run `mosh ports` to see this project's map,
+or `mosh ports list` for every project.
+
+Inside the container, `$MOSH_PORTS`, `$MOSH_PORT` and `$MOSH_PORT_BASE` carry the
+allocation. **A server must bind `0.0.0.0`, not `127.0.0.1`** — loopback inside
+the container is not reachable from the host.
+
+Ports bind to `127.0.0.1` on the host, so they are reachable from your browser
+but not from the rest of the network.
+
+### Slot allocation and reclamation
+
+Slots are recorded in `.ports` (gitignored) next to `.env`, keyed on container
+name. A new project claims the lowest unused slot. Because the key is the
+container name, `mosh fresh` keeps a project's ports.
+
+To free a slot — a project that is finished and will not be worked on again —
+**delete its line from `.ports`**. The next new project claims it. `mosh ports
+list` marks allocations whose container no longer exists as `(stale)` to show
+which lines are safe to remove.
+
+Podman fixes port mappings when the container is created, so changing a slot by
+hand only takes effect after `mosh fresh` recreates the container. For the same
+reason, containers created before this feature have no ports until recreated.
 
 ## Provisioning
 
@@ -139,6 +185,7 @@ layer on top.
 | `Containerfile` | Container image (node:20 + Claude Code + Playwright) |
 | `mosh` | Setup and launcher script |
 | `.env.example` | Template for secrets — copy to `.env` |
+| `.ports` | Host port allocations per project (gitignored, hand-editable) |
 | `config/settings.json` | Container permissions, model, env vars, status line |
 | `config/claude.json` | Baseline user config (theme, onboarding, MCP servers) |
 | `config/mcp.json` | MCP server definitions (injected into claude.json each launch) |

@@ -56,6 +56,38 @@ Similarly, if you install a plugin via `/plugin install` that is specific to
 this project, append its name to `.claude-dev/plugins.txt` (one per line,
 format: `name@marketplace`). These are also reinstalled on fresh containers.
 
+## Dev Servers and Ports
+
+This container publishes a fixed set of ports to the host. Two rules, both of
+which fail silently if ignored:
+
+**1. Bind `0.0.0.0`, never `127.0.0.1`.** A server bound to loopback inside the
+container is bound to the *container's* loopback, which the host cannot reach.
+The symptom — connection refused from the browser — looks exactly like a broken
+port mapping, so this is worth getting right the first time.
+
+**2. Use a port from `$MOSH_PORTS`.** Only these container ports are published;
+anything else is unreachable from the host no matter how it is bound.
+
+```bash
+echo "$MOSH_PORTS"   # e.g. 3000,4000,5173,8000,8080,8888,9000
+echo "$MOSH_PORT"    # 3000 — the default to reach for
+```
+
+Examples:
+
+```bash
+python3 -m http.server "$MOSH_PORT" --bind 0.0.0.0
+npm run dev -- --host 0.0.0.0 --port 5173
+jekyll serve --host 0.0.0.0 --port 4000
+```
+
+The host-side URL is *not* the same number. The host port is offset per project
+so that several containers can serve at once; `mosh ports` on the host prints the
+mapping. Tell the user which container port you bound and let them map it, or
+read `$MOSH_PORT_BASE` — host port = `$MOSH_PORT_BASE` + the index of your port
+within `$MOSH_PORTS`.
+
 ## Web Search Policy
 Do not use the WebSearch tool directly — it is blocked on this model. Instead,
 always delegate web searches to the `web-researcher` subagent, which runs on a
