@@ -328,3 +328,211 @@ Commit: `4d09ade` (playwright opt-in), then a follow-up commit dropping it from 
 - **`.env` is gitignored**, so reference lines added there are local-only. `.env.example` is the sole record a fresh clone gets. Its example block had also drifted (it still showed `claude-opus-4-6` while the live alias was `claude-opus-5`); corrected this session.
 
 - **The error message for an unapproved API key is misleading.** Declining the prompt leaves the container with no auth at all, since `mosh` unsets host `ANTHROPIC_API_KEY` and `.env` is the only source. "No" is never the right answer in this setup, despite being the recommended option.
+
+---
+
+## Session Handoff — 2026-09-16 14:19
+
+### >>> START HERE — manual verification still pending <<<
+
+The port feature is code-complete and statically verified, but everything needing a
+real podman was never run. **Do these before committing or merging
+`feat/port-allocation`.** Each has an explicit pass condition.
+
+Note `mosh fresh` ends by attaching Claude Code, so the terminal stays busy until
+`/exit` — tests needing two projects at once need two terminals.
+
+**Test 1 — ports publish and actually serve.** Terminal 1, any project:
+
+```bash
+mosh fresh
+```
+
+Watch the launch output for two things: the host's `[mosh] Ports (slot N):` table, and
+`[mosh] Serving: http://localhost:<base> -> container :3000` printed last, just before
+Claude starts. Then inside that Claude session:
+
+```bash
+python3 -m http.server "$MOSH_PORT" --bind 0.0.0.0 &
+```
+
+Open `http://localhost:<base>` in the browser.
+**Pass:** the directory listing loads.
+
+**Test 2 — no collision between two projects.** This is the property the whole design
+exists for. Leave Test 1 serving, and in terminal 2 from a *different* project:
+
+```bash
+mosh fresh
+```
+
+Start a server inside it the same way, and open both host URLs.
+**Pass:** the two bases differ, and both pages load at the same time, each showing its
+own project's files.
+
+**Test 3 — `mosh fresh` preserves the slot.** Terminal 3, from the Test 1 project:
+
+```bash
+mosh ports          # note the slot
+```
+
+`/exit` that session, `mosh fresh` again, then `mosh ports` once more.
+**Pass:** same slot, same base as before.
+
+**Test 4 — the loopback trap is real.** Inside a container, bind the wrong interface:
+
+```bash
+python3 -m http.server "$MOSH_PORT" --bind 127.0.0.1 &
+```
+
+**Pass:** the host URL refuses the connection. This is the failure mode
+`config/CLAUDE.md` warns about; confirming it proves the warning earns its place.
+
+**Test 5 — registry inspection and reclamation.** From the host:
+
+```bash
+mosh ports list
+```
+
+**Pass:** every launched project is listed `active`; a project whose container was
+removed shows `(stale — no container)`. Delete a stale line from `.ports`, launch a
+brand-new project, and confirm it claims that freed slot.
+
+**Also expect:** launching a not-yet-freshed container warns it was made by mosh v3
+*and* that it publishes no ports. That is correct — v3 containers run fine, they just
+have no ports until recreated. They should show **no** `Serving:` line.
+
+
+### Completed This Session
+
+- **Added per-container host port allocation** so each mosh container can serve web
+  content viewable at `http://localhost:<port>` on the host, with no possibility of
+  two containers mapping the same host port. Containers published no ports at all
+  before this — there was no `-p` anywhere in `mosh`.
+
+  Design, settled with the user up front:
+  - **Slot-based registry.** Each project gets a slot; host base = `20000 + slot*10`.
+    Slots live in `.ports` (gitignored, beside `.env`), keyed on container name.
+    Lowest unused slot wins. Chosen over a hash of the container name, which gives
+    only a *probability* of uniqueness (~18% collision odds at 20 projects) and
+    records nothing when a collision forces a shift.
+  - **Curated container-side ports**, identical in every container:
+    3000, 4000, 5173, 8000, 8080, 8888, 9000 → host `base+0..6`. Common dev-server
+    defaults, so most tools need no `--port` flag. Stride is 10 with only 7 published:
+    the 3 spares let an eighth port be added later without renumbering anything.
+  - **Loopback-only binding** (`127.0.0.1:`). These dev servers have no auth in front
+    of them, so they stay off the LAN. An opt-in LAN toggle mirroring `mosh dcg` was
+    considered and deliberately not built.
+  - **Reclamation is a hand edit.** Delete a line from `.ports` to return the slot to
+    the pool. No `prune` subcommand — this keeps a destructive code path out of the
+    script entirely. `mosh ports list` marks entries whose container is gone as
+    `(stale)` so it is obvious which lines are safe to remove.
+
+  New: `mosh ports` (this project's map) and `mosh ports list` (all projects). Both
+  are strictly read-only — inspecting never allocates a slot.
+
+- **Deleted a stale two-line comment at the end of `.gitignore`** claiming
+  `config/claude.json` runtime rewrites were ignored. Investigated before removing:
+  the rule it described was never actually written, and it would not have worked
+  anyway — `.gitignore` has no effect on tracked files, and that intent needs
+  `git update-index --skip-worktree`. It was describing the pre-`ba31666` architecture
+  when `config/` was the container's writable `~/.claude`; today `/mosh-config` is
+  mounted `:ro` so a container cannot write there at all.
+
+- **Created `docs/adr/`** and the repo's first ADR,
+  `0001-per-container-host-port-allocation.md`, recording registry-vs-hash,
+  curated-vs-contiguous ports, and loopback-vs-LAN with the alternatives considered.
+
+### Current State
+- Branch: `feat/port-allocation` (**not merged, nothing committed** — all changes are
+  working-tree only; `/workspace` is a host bind mount so they survive `mosh fresh`).
+- Files touched: `mosh`, `config/launch.sh`, `config/CLAUDE.md`, `README.md`,
+  `.gitignore`, plus new `docs/adr/0001-per-container-host-port-allocation.md`.
+- `MOSH_VERSION` 3 → 4, with a version-history entry. Existing containers warn on
+  launch and gain ports only after `mosh fresh`.
+- Tests: no suite in this repo. `bash -n` clean on `mosh` and `config/launch.sh`;
+  shellcheck output **matches HEAD exactly** on both (an SC2013 introduced by the
+  first draft was fixed). Allocation logic exercised against a harness: sequential
+  allocation, idempotent re-lookup, slot reclamation after a hand delete, 20
+  concurrent allocations yielding 20 unique slots with no leftover lock,
+  registry-full refusal writing nothing, and correct `-p` args. Real `./mosh ports`,
+  `ports list`, `ports bogus` and `help` runs against a stub podman.
+- **Not yet verified — needs podman on the host:** the actual `podman run` with `-p`
+  flags, `mosh fresh` preserving a slot, two containers serving simultaneously, and
+  the loopback negative test.
+
+### Next Steps
+1. **Run Tests 1-5 in the START HERE block at the top of this handoff.** Not repeated
+   here on purpose — one copy, so the two cannot drift apart.
+2. Commit. User asked to consider splitting the `.gitignore` comment deletion from the
+   port feature — decide one commit or two, then merge to `main`.
+3. Carry-forward from prior sessions, still open: exercise `/model sonnet`, `/fast`
+   and a `web-researcher` subagent call to prove the Sonnet and Haiku aliases resolve.
+   Opus and Fable are confirmed; a typo in the other two stays invisible until
+   something routes to them.
+4. Carry-forward: `mosh fresh` on remaining project containers for the gateway env,
+   the API-key approval, and Fable — now also for ports.
+
+### Open Questions / Blockers
+- None for the port work.
+- Still blocked upstream: Fable returns HTTP 429 from the gateway (Google Cloud quota
+  `RESOURCE_EXHAUSTED` on base model `anthropic-claude-fable`). Leave the alias
+  configured; it starts working the day the quota is raised.
+
+### Relevant Context — things worth not rediscovering
+
+- **Podman fixes port mappings at container-creation time.** A mapping cannot be added
+  to a running container, which is why a whole block is pre-published whether used or
+  not, and why an eighth port would mean `mosh fresh`. Ports belong to the same
+  category as `--env-file`: baked in at creation, unlike `config/`, which is
+  bind-mounted and applies at next launch.
+
+- **`.ports` is mosh's first host-side shared state file.** The `dcg`/`playwright`
+  precedent stores per-project sentinels inside the project's own volume, which
+  structurally cannot work here: detecting a collision requires seeing every project
+  at once, and a per-project volume only ever sees itself.
+
+- **A v3 container under v4 mosh runs, by design.** `MOSH_MIN_COMPAT` stayed at 1, so
+  only pre-v1 containers are hard-blocked; v3 warns and proceeds. The v3→v4 change is
+  purely additive (publishing ports), so nothing about an existing container is broken
+  by the new script — it simply cannot serve web content until `mosh fresh`. Raising
+  MIN_COMPAT to 4 would have hard-failed every existing container across every project
+  for the sake of an additive feature.
+
+- **Three bugs that only surfaced by running the code.** The third was caught by the
+  user asking whether a v3 container really was safe under v4 mosh:
+  (a) `info` inside `ports_registry_init` wrote to stdout, which `$(port_slot_for …)`
+  captures — the first-ever launch would have taken the message *plus* the number as
+  its slot. Any human-facing output from a function whose stdout is a return value has
+  to go to stderr. (b) A refused allocation was appended to the registry *before* the
+  range check, so a full registry would record an unusable line that every later
+  launch looked up and refused again — permanently poisoned. Validate before writing.
+  (c) The resume path warned "this container publishes no ports" for a pre-v4
+  container but still passed `MOSH_PORT*` on the exec, so `launch.sh` printed
+  `Serving: http://localhost:<base>` and `config/CLAUDE.md` told Claude that port was
+  reachable — directly contradicting the warning three lines above. The port env is
+  now blanked on that path. Note it is blanked to a one-element array rather than
+  `()`, because `"${empty[@]}"` under `set -u` errors on bash 3.2.
+
+- **The launch banner scrolls away on a new container.** Claude Code update,
+  provisioning and plugin installs all print after the host's port table, so
+  `launch.sh` repeats the essentials immediately before `claude` starts. That is why
+  the port info is printed twice rather than once.
+
+- **`mosh fresh` cannot be followed by `mosh ports` in the same terminal** — `fresh`
+  ends by attaching Claude Code, so the terminal is occupied until `/exit`, at which
+  point the container stops. Use a second terminal, or just read the two port lines
+  printed during launch. (Caught by the user; the first verification sequence written
+  this session was wrong.)
+
+- **Resume-path gating uses the `mosh.version` label, not `podman inspect` of port
+  bindings.** The label is already read a few lines earlier and cannot misreport
+  because of a runtime-specific inspect field name; a bad Go template would have
+  silently produced a false "publishes no ports" warning on a container that has them.
+
+- **Bash 3.2 compatibility matters.** The shebang is `#!/usr/bin/env bash`, which on
+  macOS may resolve to `/bin/bash` 3.2, where `"${arr[@]}"` on an empty array under
+  `set -u` errors. New code avoids empty-array expansion and associative arrays.
+
+- **The `.ports` lock is a `mkdir` mutex** with a trap on `EXIT INT TERM`. `mkdir` is
+  atomic on both macOS and Linux. Verified with 20 parallel allocations.
