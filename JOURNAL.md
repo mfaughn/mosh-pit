@@ -602,9 +602,10 @@ registered containers were active. Same precondition as Test 5b, so they close t
     request from a separate `canonicalModel` field. The gateway **403s** the suffixed
     string if sent literally, which is why the display name and the wire name differ.
   - **Why Opus worked and Fable didn't:** the registry marks Opus 5 `supports_1m_suffix`,
-    so Claude Code appends `[1m]` itself. Fable 5.1 and Sonnet 5 are marked
-    `native_1m` *without* `supports_1m_suffix` — correct for a first-party ID, useless for
-    a prefixed one that never matches the entry.
+    so Claude Code appends `[1m]` itself **when resolving the startup default model only**
+    (see the 2026-09-18 entry — this is narrower than it first appeared). Fable 5.1 and
+    Sonnet 5 are marked `native_1m` *without* `supports_1m_suffix` — correct for a
+    first-party ID, useless for a prefixed one that never matches the entry.
   - **Verified fix**, run end to end in this container:
     `ANTHROPIC_DEFAULT_FABLE_MODEL='itl-airms/claude-fable-5-1[1m]' claude -p … --model fable`
     returned `contextWindow: 1000000`, `canonicalModel: claude-fable-5-1`, HTTP 200.
@@ -620,10 +621,17 @@ registered containers were active. Same precondition as Test 5b, so they close t
    ```bash
    export ANTHROPIC_DEFAULT_FABLE_MODEL='itl-airms/claude-fable-5-1[1m]'
    export ANTHROPIC_DEFAULT_SONNET_MODEL='itl-airms/claude-sonnet-5[1m]'
+   export ANTHROPIC_DEFAULT_OPUS_MODEL='itl-airms/claude-opus-5[1m]'
    ```
    Leave Haiku bare — its real ceiling *is* 200K, so a suffix would make Claude Code
-   believe 1M and skip compaction until the API hard-errors. Opus needs no change
-   (Claude Code adds the tag itself); add it only for explicitness.
+   believe 1M and skip compaction until the API hard-errors.
+   **Opus DOES need the tag** — an earlier version of this entry said it did not, which
+   was wrong and cost a session. Claude Code appends `[1m]` only when resolving the
+   *startup default* model. An explicit `/model opus` resolves to the bare gateway ID and
+   silently drops to 200K for the rest of the session; `/clear` does not restore it.
+   Measured in-container:
+   `/model opus[1m]` → 1,000,000 · `/model opus` → 200,000 ·
+   `/model opus` with the tag in the env var → 1,000,000.
    Requires `mosh fresh` — the tier aliases enter via `--env-file` at `podman run`, and
    the resume path (`mosh:733-734`) re-passes only `MOSH_PORT*` and `MOSH_NEW_SESSION`.
    For the current session without a rebuild: `/model fable[1m]`.
@@ -674,3 +682,58 @@ registered containers were active. Same precondition as Test 5b, so they close t
 - **`pkill -f "http.server"` kills the shell running it**, because the pattern matches that
   shell's own command line. Cost a test server and an exit-144 mystery this session. Use
   a bracketed pattern (`'[h]ttp\.server'`) or kill by PID.
+
+## Session Handoff — 2026-09-18
+
+### Completed This Session
+
+- **Found the real scope of the `[1m]` behaviour, correcting the 2026-09-16 entry.**
+  Claude Code appends `[1m]` only when resolving the **startup default** model. Any
+  explicit `/model` switch resolves to the bare gateway ID and silently drops the session
+  to a 200K window for good. Hit in a live container: Opus at 1M → `/model fable` → work →
+  `/clear` → `/model opus` → stuck at 200K. `/clear` is unrelated and cannot restore it.
+
+  Measured in-container with `claude -p --output-format json`:
+
+  | Model argument | Resolves to | contextWindow |
+  |---|---|---|
+  | `opus[1m]` | `itl-airms/claude-opus-5[1m]` | 1,000,000 |
+  | `opus` | `itl-airms/claude-opus-5` | 200,000 |
+  | `itl-airms/claude-opus-5` | `itl-airms/claude-opus-5` | 200,000 |
+  | `itl-airms/claude-opus-5[1m]` | `itl-airms/claude-opus-5[1m]` | 1,000,000 |
+  | `opus`, with `[1m]` in `ANTHROPIC_DEFAULT_OPUS_MODEL` | `itl-airms/claude-opus-5[1m]` | 1,000,000 |
+
+  That last row is why the env fix matters: with the tag in the variable, *every* path
+  resolves to 1M, including a plain `/model opus`.
+
+- **Corrected the 2026-09-16 handoff in place**, which advised that Opus needed no env
+  change. It did. Left wrong, it would have reproduced this exact failure.
+
+### Current State
+- Branch: `main`, clean, pushed. Port feature merged; verification status unchanged from
+  the 2026-09-16 entry (Test 3, Test 5b and the `(stale)` branch still open — see that
+  entry's START HERE).
+- No code changed this session; journal corrections only.
+
+### Next Steps
+1. Unchanged and still not done: apply the three `[1m]` exports in `~/.zshenv`, then
+   `mosh fresh` each container. See the 2026-09-16 Next Steps for the exact block.
+2. Everything else carries forward from the 2026-09-16 entry.
+
+### Open Questions / Blockers
+- None.
+
+### Relevant Context — things worth not rediscovering
+
+- **Recovering a session that has dropped to 200K:** `/model opus[1m]` (or the full
+  `/model itl-airms/claude-opus-5[1m]`). A model switch re-resolves the window live, so
+  no restart and no `mosh fresh` is needed. Both forms verified.
+
+- **The failure is silent.** Nothing warns that the window shrank; it just starts
+  auto-compacting four-fifths early. If a long session begins compacting sooner than
+  expected, check the model string in `/status` before assuming anything else.
+
+- **No model is persisted to disk in this setup** — `settings.json` has `"model": null`
+  and `~/.claude.json` stores no model string anywhere. Model selection is pure session
+  state, so a bad selection is never sticky across a restart and there is no file to
+  hand-edit to fix one.
