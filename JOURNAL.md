@@ -737,3 +737,111 @@ registered containers were active. Same precondition as Test 5b, so they close t
   and `~/.claude.json` stores no model string anywhere. Model selection is pure session
   state, so a bad selection is never sticky across a restart and there is no file to
   hand-edit to fix one.
+
+## Session Handoff — 2026-10-29 14:12
+
+### Completed This Session
+
+- **Found why plugin installs failed after a Claude Code update, and fixed it in `mosh`.**
+  Not a Claude Code regression — `claude plugin install` works fine on 2.1.292 and the CLI
+  surface is unchanged. The cause is that **`mosh` never registered a plugin marketplace**
+  (`grep marketplace mosh config/launch.sh` → no hits). `claude plugin install
+  name@marketplace` resolves the marketplace from the container's `~/.claude` volume, so on
+  a volume that has never had one registered, *every* install fails:
+
+  ```
+  ✘ Failed to install plugin "code-review@claude-plugins-official":
+    Plugin "code-review" not found in marketplace "claude-plugins-official".
+  ```
+
+  That all-or-nothing shape matches the reported symptom ("failed to install any of them")
+  better than a partial failure would.
+
+- **Three changes to `mosh`** (uncommitted, in the working tree):
+
+  1. **`register_marketplaces()` + `PLUGIN_MARKETPLACES` array** — registers marketplaces
+     before any install. Idempotent (~0.7s when already present), so it runs unconditionally
+     rather than behind a check. This is the actual bug fix.
+  2. **Failures are loud** — `install_plugins()` collects failures, reports them via `error`
+     with names, returns non-zero. New-container path now prints `Setup complete, but some
+     plugins failed to install` instead of a clean "Setup complete." The old silent yellow
+     `warn` is precisely how a five-plugin wipeout scrolled past unnoticed.
+  3. **`heal_plugins()` on the reuse path** — the existing-container branch previously ran
+     `start` → `exec launch.sh` → `return` and never touched plugins, so a volume that lost
+     its state stayed broken on every future launch. Now gated on a ~0.6s
+     `plugin list --json | jq length` probe; the full install pass runs only when state is
+     actually missing. Repair failure warns and continues rather than blocking the session.
+
+  Also added `</dev/null` to the install call — a marketplace-declared confirmation prompt
+  on non-TTY stdin would otherwise hang the launch.
+
+- **Updated `README.md`** with the marketplace-ordering requirement and the self-heal behaviour.
+
+### Current State
+- Branch: `main`. **Uncommitted**: `mosh` (+120/-11), `README.md` (+6).
+- Last checkpoint: `7517423` — Correct [1m] guidance: Opus needs the tag too.
+- Tests: **No test suite exists in this repo** — nothing to run. Verification was
+  `bash -n` (clean), `shellcheck` (3 warnings, all pre-existing at lines 508/617/1028,
+  none in new code), and a stubbed-runtime harness covering: happy path, single-plugin
+  failure, marketplace-registration failure, heal-skip when healthy, heal-triggers when
+  empty, heal-failure-continues, missing per-project `plugins.txt`, and survival under
+  `set -e`. Plus the original bug end-to-end: against a virgin `CLAUDE_CONFIG_DIR` the old
+  call fails, `install_all_plugins` on that same dir installs all five.
+- Live container's real plugin state: all five reinstalled and enabled.
+- Backup of the pre-edit script at `/tmp/mosh.orig` (ephemeral — gone on container restart).
+
+### Next Steps
+1. **Commit the two modified files** — the user was asked and the session ended before
+   answering. Suggested message: `Register plugin marketplaces before installing`.
+2. **Verify against a genuinely fresh container**: `mosh fresh` and confirm all five
+   plugins install on first launch. Everything so far was verified via isolated
+   `CLAUDE_CONFIG_DIR`s, not a real container lifecycle.
+3. Consider making `mosh update` (mosh:~1012) check plugin state — see Blockers.
+
+### Open Questions / Blockers
+
+- **The 2.1.289 → 2.1.292 sequence is still unexplained.** `known_marketplaces.json` had
+  `lastUpdated: 13:40:17` and the plugin cache was fully populated with all five, yet
+  `installed_plugins.json` was `{"version":2,"plugins":{}}` at session start. *Something*
+  registered the marketplace and populated the cache **after** `install_plugins` had already
+  failed. Leading hypothesis (unproven): Claude Code's own startup resolves `enabledPlugins`
+  from the synced `settings.json`, which would also explain why plugin skills were available
+  in-session despite an empty install registry. If plugins vanish again after an update, start
+  here. The self-heal now papers over it, but does not explain it.
+
+- **`mosh update` still has the drift gap.** It updates Claude Code in a stopped container
+  and exits without touching plugins. The binary lives on the **ephemeral overlay**, plugin
+  state on the **persistent volume**, so the two drift independently. The new self-heal
+  catches it on the next `mosh` launch, but only after the fact.
+
+### Relevant Context — things worth not rediscovering
+
+- **The ephemeral/persistent split is the root structural issue.** Verified via `df`:
+  `~/.claude` is a named volume on `/dev/vda4` (persists); `~/.local/share/claude/versions/`
+  is on the overlay (does not). Both `2.1.289` (Oct 5, image layer) and `2.1.292` (Oct 7,
+  the update) sat on the overlay. Any future "state disappeared after an update" bug should
+  be checked against this split first.
+
+- **v1→v2 schema migration was investigated and ruled out.** The new binary *silently
+  ignores* v1-shaped `installed_plugins.json` — no error, just "No plugins installed" —
+  which looks exactly like the bug. But 2.1.289 already writes v2 (confirmed by running the
+  old binary against an isolated config dir), so this was not the cause here. Worth
+  remembering as a failure mode: the silence makes it easy to misdiagnose.
+
+- **A marketplace dir that exists but is not a valid git clone does *not* break installs.**
+  Tested explicitly; it succeeded. An earlier "corrupted installLocation" warning seen in
+  testing was a red herring from a pointed-elsewhere `installLocation`, not the real failure.
+
+- **Useful probes:** `claude plugin list --json | jq length` is ~0.6s and is what
+  `heal_plugins` gates on. A re-install of an already-present plugin is ~2.5s, which is why
+  the probe exists rather than just re-running installs every launch.
+
+- **`bash -lc` resolves `claude` correctly** in this container (login shell keeps
+  `~/.local/bin` on PATH) — checked, because `heal_plugins` depends on it. `jq` is at
+  `/usr/bin/jq`.
+
+- **Methodology note:** the first diagnosis this session was wrong. It was presented as a
+  container-*build*-time issue; the user corrected that it happens when starting an
+  *existing* container that updates Claude Code before launching it. That correction is what
+  surfaced the reuse-path gap (fix #3) — the build path alone would not have explained a
+  recurring failure.

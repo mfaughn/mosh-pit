@@ -144,6 +144,12 @@ Per-project plugins can be listed in `.claude-dev/plugins.txt` (one per
 line). Default plugins shared across all projects live in
 `config/default-plugins.txt`.
 
+Plugin marketplaces are registered before any install runs — `claude plugin
+install name@marketplace` cannot resolve a marketplace the container's
+`~/.claude` volume has never seen, and without this every install fails.
+Launching an existing container also checks whether its plugin state is
+intact and reinstalls if the volume lost it.
+
 On new containers, Claude Code is automatically updated to the latest
 version before provisioning runs.
 
