@@ -1,92 +1,60 @@
 # Global Preferences (Container Environment)
 
-## Working Style
-- Ask clarifying questions before making significant changes
-- Prefer simple, readable solutions over clever ones
-- Explain reasoning when making architectural decisions
-- When uncertain between approaches, present options rather than choosing arbitrarily
+## How I like to work
+- I make the architectural calls. For a choice with real trade-offs (a new
+  dependency, a data model, how components fit together), give me the options and
+  your recommendation, and let me pick.
+- You don't need to check in for routine steps: reading and editing files in the
+  project, running tests, builds and linters, and installing packages (tracked as
+  described below).
+- Ask before deleting files, rewriting git history, pushing, or sending anything off
+  this machine. Those are hard to undo.
+- When I ask "why", explain the trade-offs, not just the choice.
 
-## Code Principles
-- Favor explicit over implicit
-- Write docstrings for public functions and classes
-- Prefer coding styles and conventions that are intelligible and comprehensible by junior level developers when possible.
-- Keep functions focused—if it needs "and" in the description, consider splitting
+## Code
+- Write code a junior developer can follow: simple and explicit beats clever.
+- Write docstrings for public functions and classes.
 
-## Workflow
-- ALWAYS run tests before considering a task complete
-- Commit messages: concise but descriptive (imperative mood)
-- Ask before deleting files or making destructive changes
-
-## Communication
-- Be direct; skip unnecessary preamble
-- When I ask "why," explain the tradeoffs, not just the choice
+## Finishing a task
+- Run the project's tests before calling a task done. If there is no test suite, say
+  what you checked instead. For shell scripts, that means `shellcheck` and `bash -n`.
+- Commit messages: imperative mood, concise but descriptive.
 
 ## Available Tools
 
-The container ships with these CLI tools — prefer them when applicable:
+Besides the usual tools, the container has:
 
-- **`gh`** — GitHub CLI. Use for PR/issue/release ops, `gh api` for raw REST/GraphQL, `gh run` for Actions. Authenticated via `GITHUB_PERSONAL_ACCESS_TOKEN` if set in `.env`.
-- **`rg` (ripgrep)** — Faster `grep`, respects `.gitignore`. Default choice for text search.
-- **`fd`** — Faster `find`, respects `.gitignore`. Default choice for file lookups.
-- **`ast-grep` (`sg`)** — Structural code search by AST pattern. Use for refactors and structural queries that regex can't express cleanly (e.g. "find all calls to `foo()` whose first arg is `null`").
-- **`shellcheck`** — Lints shell scripts. Run before declaring a bash edit done.
-- **`jq`** — JSON query/transform.
-- **`tini`** — PID 1 init (transparent).
+- **`gh`**: GitHub CLI, authenticated via `GITHUB_PERSONAL_ACCESS_TOKEN` from `.env`.
+  `gh api` covers raw REST/GraphQL.
+- **`rg`**, **`fd`**: fast grep and find that respect `.gitignore`.
+- **`ast-grep` (`sg`)**: structural search by AST pattern, for refactors that regex
+  can't express cleanly.
+- **`shellcheck`**, **`jq`**.
 
 ## Container Package Tracking
 
-This environment runs inside a container. When you install system packages
-(apt, pip, npm -g, etc.) to get work done, also append the install command
-to `.claude-dev/provision.sh` in the project root. Create the file with a
-bash shebang if it doesn't exist. Keep the script idempotent (use
-`apt-get install -y`, `pip install`, etc.). Example:
+Packages you install by hand are lost when the container is recreated with
+`mosh fresh`. So when you install a system package (apt, pip, npm -g, etc.), also
+append the install command to `.claude-dev/provision.sh` in the project root. Create
+it with a bash shebang and `set -euo pipefail` if it doesn't exist, and keep it
+idempotent (`apt-get install -y`, etc.). `mosh` re-runs it on fresh containers.
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-apt-get update && apt-get install -y --no-install-recommends default-jdk
-pip install some-package
-```
-
-This file is checked into the project and automatically re-run when the
-container is recreated with `claude-dev fresh`, so all project-specific
-dependencies are restored without manual intervention.
-
-Similarly, if you install a plugin via `/plugin install` that is specific to
-this project, append its name to `.claude-dev/plugins.txt` (one per line,
-format: `name@marketplace`). These are also reinstalled on fresh containers.
+Likewise, append a project-specific plugin installed via `/plugin install` to
+`.claude-dev/plugins.txt`, one `name@marketplace` per line.
 
 ## Dev Servers and Ports
 
-This container publishes a fixed set of ports to the host. Two rules, both of
-which fail silently if ignored:
+Two rules. Breaking either one fails silently, with "connection refused" in the
+host's browser:
 
-**1. Bind `0.0.0.0`, never `127.0.0.1`.** A server bound to loopback inside the
-container is bound to the *container's* loopback, which the host cannot reach.
-The symptom — connection refused from the browser — looks exactly like a broken
-port mapping, so this is worth getting right the first time.
+1. **Bind `0.0.0.0`, not `127.0.0.1`.** Loopback inside the container is the
+   container's own loopback, which the host can't reach.
+2. **Use a port from `$MOSH_PORTS`** (`$MOSH_PORT` is the default). Only those
+   container ports are published to the host.
 
-**2. Use a port from `$MOSH_PORTS`.** Only these container ports are published;
-anything else is unreachable from the host no matter how it is bound.
-
-```bash
-echo "$MOSH_PORTS"   # e.g. 3000,4000,5173,8000,8080,8888,9000
-echo "$MOSH_PORT"    # 3000 — the default to reach for
-```
-
-Examples:
-
-```bash
-python3 -m http.server "$MOSH_PORT" --bind 0.0.0.0
-npm run dev -- --host 0.0.0.0 --port 5173
-jekyll serve --host 0.0.0.0 --port 4000
-```
-
-The host-side URL is *not* the same number. The host port is offset per project
-so that several containers can serve at once; `mosh ports` on the host prints the
-mapping. Tell the user which container port you bound and let them map it, or
-read `$MOSH_PORT_BASE` — host port = `$MOSH_PORT_BASE` + the index of your port
-within `$MOSH_PORTS`.
+The host port is a different number: each project gets its own offset. Host port =
+`$MOSH_PORT_BASE` + the index of your port within `$MOSH_PORTS`, and `mosh ports` on
+the host prints the mapping. Tell me which container port you bound.
 
 ## Web Research
 
@@ -111,43 +79,20 @@ versions and identifiers from WebFetch as unverified until confirmed:
 
 - **When an exact value matters, use `curl` from Bash.** It returns the raw bytes
   with no summarizer in between.
-- **Fetch raw structured data, not rendered pages.** `api.github.com/repos/OWNER/
-  REPO/releases/latest` instead of the HTML releases page; `raw.githubusercontent.com`
-  instead of a `github.com/.../blob/...` view. JSON gives the summarizer far less room
-  to paraphrase a value into something wrong.
-- **Name the exact field you want and demand it verbatim.** "Report the literal
-  `published_at` field" beats "when was this released?". Add "quote exactly, do not
-  paraphrase."
-- **Give it an explicit way to say nothing.** "If no such sentence exists, reply
-  NOT PRESENT." Without that, an absent fact tends to come back as a plausible
-  invention.
-- **Re-fetch to confirm anything load-bearing.** A second fetch with a narrower,
-  differently-worded prompt is cheap and catches exactly the date-style error above.
-  If two fetches disagree, trust neither until a third source settles it.
-- **Prefer a primary source over an aggregator.** Version-tracker sites lag and
-  contradict each other; the project's own API or repo does not.
-- **Use `offset` for long pages** rather than hoping one call covered the whole
-  document. A summary of a truncated page looks identical to a summary of a whole one.
-- **Do not assume an unfamiliar URL is fabricated — check it.** A search returned
-  `github.com/podman-container-tools/podman`; it was dismissed as a hallucination
-  because the known repo is `containers/podman`. It was real — Podman moved to a
-  CNCF-owned org and that repo has 33k stars. Verify before disbelieving, the same
-  way you verify before believing. Both errors cost the same.
+- **Prefer raw, structured sources**: `api.github.com` or `raw.githubusercontent.com`
+  over rendered GitHub pages, `.md` versions of docs pages, and primary sources over
+  aggregators.
+- **Ask for the exact field, quoted verbatim**, and tell it to reply NOT PRESENT if
+  the field isn't there. Without that escape, a missing fact tends to come back as a
+  plausible invention.
+- **Re-fetch anything that matters** with a differently worded prompt. If two fetches
+  disagree, trust neither until a third source settles it.
+- **Use `offset` on long pages.** A summary of a truncated page looks the same as a
+  summary of a whole one.
+- **Check unfamiliar URLs before dismissing them.** `github.com/podman-container-tools/podman`
+  looked invented but was real: Podman had moved orgs.
 
-## UADF (Universal Agentic Development Framework)
+## UADF
 
-When I invoke any `/uadf-*` skill or say "use UADF", follow the framework defined in `~/.claude/uadf/framework.md`.
-
-UADF adds session continuity (JOURNAL.md handoffs) and decision tracking (ADRs) on top of Claude Code's built-in capabilities. Feature planning, TDD, code review, and agent teams are handled by native tools and official plugins.
-
-**Core Principles:**
-- Memory lives in files, not chat history
-- Write a session handoff before ending so the next session can resume
-- Work on feature branches, keep main deployable
-- Record significant architectural decisions as ADRs
-
-**Skills:**
-- `/uadf-init` — Initialize project with JOURNAL.md and docs/adr/
-- `/uadf-start` — Begin/resume a session
-- `/uadf-handoff` — Write session handoff to JOURNAL.md
-- `/uadf-adr` — Create Architecture Decision Record
+"Use UADF" or any `/uadf-*` command means following `~/.claude/uadf/framework.md`:
+session handoffs in `JOURNAL.md` and decision records in `docs/adr/`.
