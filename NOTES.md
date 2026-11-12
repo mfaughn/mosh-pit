@@ -33,8 +33,7 @@ These files exist in both `~/.claude/` (host) and `config/` (repo) but may diver
 | `CLAUDE.md` | Standard preferences | Adds web search policy |
 | `settings.json` | Limited permissions, sonnet default | YOLO permissions, WebSearch denied |
 | `commands/*.md` | Same content | Same content (manually synced) |
-| `uadf/` | Same content | Same content (manually synced) |
-| `templates/` | Same content | Same content (manually synced) |
+| `uadf/` | Symlinked to `config/uadf/` by `install-host.sh` | Copied from `config/uadf/` at launch; skills to `~/.claude/skills/` |
 | `agents/` | Does not exist on host | `web-researcher.md` for search delegation |
 
 ### Web Search Delegation (2026-02-24)
@@ -299,8 +298,7 @@ configuration the container was originally created with.
 | `config/mcp.json` | MCP server definitions | Yes |
 | `config/CLAUDE.md` | Container-specific global preferences | Yes |
 | `config/commands/` | Slash commands (mirrored from ~/.claude/commands/) | Yes |
-| `config/uadf/` | UADF framework (mirrored from ~/.claude/uadf/) | Yes |
-| `config/templates/` | Templates (mirrored from ~/.claude/templates/) | Yes |
+| `config/uadf/` | UADF framework and skills (source of truth) | Yes |
 | `config/agents/` | Custom subagents (web-researcher.md) | Yes |
 | `NOTES.md` | This file — ongoing project notes | Yes |
 | `README.md` | User-facing documentation | Yes |

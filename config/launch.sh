@@ -31,7 +31,7 @@ done
 [ -f "$HOME/.claude/statusline.sh" ] && chmod +x "$HOME/.claude/statusline.sh"
 
 # Directories: copy contents into place (cp -rT merges into the target).
-for d in agents templates uadf; do
+for d in agents uadf; do
   [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
 done
 
