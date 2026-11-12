@@ -119,4 +119,4 @@ WORKDIR /workspace
 # Entrypoint — tini as PID 1 to reap zombie subprocesses
 # ---------------------------------------------------------------------------
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["claude", "--dangerously-skip-permissions"]
+CMD ["claude", "--permission-mode", "auto"]

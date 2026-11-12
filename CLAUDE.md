@@ -32,11 +32,14 @@ container: the global `CLAUDE.md`, `settings.json`, agents and UADF.
 
 ## Claude Code behavior verified in this setup
 
-- `launch.sh` always starts Claude Code with `--dangerously-skip-permissions`.
-- A bare-name deny rule (`deny: ["WebSearch"]`) removes the tool from the main session
-  and all subagents, even in bypass mode.
+- `launch.sh` starts Claude Code in auto mode (`--permission-mode auto`). The classifier
+  works through the gateway (tested 2026-11-12). Auto mode ignores broad allow rules
+  such as `Bash(*)`.
+- Deny rules apply before the classifier, and in every mode including bypass. A
+  bare-name deny (`deny: ["WebSearch"]`) removes the tool from the main session and all
+  subagents.
 - A `Write(path)` deny rule never matches anything. To protect a path, write the rule
-  against `Edit(path)` and `Read(path)`; those hold even in bypass mode.
+  against `Edit(path)` and `Read(path)`.
 - The gateway is NIST's LiteLLM, backed by Vertex AI. Its `/v1/models` context windows are
   wrong. For model, context-window and auth details, see the 2026-09 entries in
   `JOURNAL_ARCHIVE.md`.

@@ -208,7 +208,10 @@ fi
 
 # Resume last session if available (unless MOSH_NEW_SESSION is set).
 RESUME_FILE="$HOME/.claude/last-session-id"
-CLAUDE_ARGS=(--dangerously-skip-permissions)
+# Auto mode: a classifier model reviews risky actions (exfiltration, force pushes,
+# destructive commands) instead of skipping all checks. The container protects the
+# host, but not /workspace (a bind mount of the real project) or credentials.
+CLAUDE_ARGS=(--permission-mode auto)
 RESUMING=0
 if [ "${MOSH_NEW_SESSION:-0}" != "1" ] && [ -f "$RESUME_FILE" ]; then
   SESSION_ID=$(cat "$RESUME_FILE")

@@ -181,8 +181,11 @@ layer on top.
 - **Host commands**: slash commands from `~/.claude/commands/` on the host
   are bind-mounted into the container so both environments share the same
   commands.
-- **YOLO mode**: the container runs with `--dangerously-skip-permissions`
-  and all tools pre-approved. Host-side Claude Code is unaffected.
+- **Auto mode**: the container starts Claude Code with `--permission-mode auto`.
+  Routine actions run without prompts, and a classifier model blocks risky ones
+  (data exfiltration, force pushes, destructive commands). Deny rules still apply
+  first. Press Shift+Tab to switch modes in a session. Host-side Claude Code is
+  unaffected.
 
 ## Files
 
