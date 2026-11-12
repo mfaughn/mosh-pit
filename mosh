@@ -75,7 +75,9 @@ CONTAINER_PORT_LABELS=("node/next" "jekyll" "vite" "python http.server" "generic
 #   4 — Publish a per-project block of host ports (see PORTS_FILE above).
 #       Podman fixes port mappings at container-creation time, so existing
 #       containers must be recreated with 'mosh fresh' to gain ports.
-MOSH_VERSION=4
+#   5 — Create containers with --security-opt=no-new-privileges. A creation-time
+#       flag: existing v4 containers keep working but lack it until 'mosh fresh'.
+MOSH_VERSION=5
 MOSH_MIN_COMPAT=1
 
 # ---------------------------------------------------------------------------
@@ -512,6 +514,9 @@ build_common_args() {
   # produce a temp file with the actual values. Only variables listed in
   # the mosh-pit .env are included — the full host environment is not leaked.
   RESOLVED_ENV_FILE=$(mktemp)
+  # The file holds secrets in plain text. Remove it however the script exits,
+  # including Ctrl+C or an error before the container is created.
+  trap 'rm -f "${RESOLVED_ENV_FILE:-}"' EXIT
   while IFS= read -r line; do
     # Skip comments and blank lines
     [[ "$line" =~ ^[[:space:]]*# ]] && continue
@@ -532,6 +537,11 @@ build_common_args() {
 
   COMMON_ARGS=(
     --shm-size=256m
+    # Stop any process from gaining privileges through setuid binaries (su, mount,
+    # passwd...) or file capabilities. Container root is VM root, so this closes
+    # the path from the unprivileged claude user to root. Provisioning is not
+    # affected: `exec --user root` starts as root rather than switching to it.
+    --security-opt=no-new-privileges
     --env-file "$RESOLVED_ENV_FILE"
     -e PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
     -e NO_UPDATE_NOTIFIER=1
@@ -546,7 +556,6 @@ build_common_args() {
   )
 
   # Mount host commands so both host and container share the same slash commands.
-  # Falls back to config/commands if host doesn't have them.
   if [[ -d "$host_commands_dir" ]]; then
     COMMON_ARGS+=(-v "$host_commands_dir:/home/claude/.claude/commands:ro,z")
     info "Commands: $host_commands_dir (shared with host)"
@@ -879,6 +888,8 @@ cmd_launch() {
   # always attach via `exec -it`. This avoids TTY issues with `podman start -ai`
   # on macOS, where full-screen TUI output doesn't render on reattach.
   $RUNTIME run -d "${COMMON_ARGS[@]}" "$IMAGE_NAME" sleep infinity
+  # The env file is read only at creation; delete it now rather than at exit.
+  rm -f "$RESOLVED_ENV_FILE"
 
   # --- New container setup: update Claude Code, provision, install plugins ---
 
@@ -947,7 +958,6 @@ cmd_launch() {
   echo ""
   $RUNTIME exec -it "${port_env[@]}" -e "MOSH_NEW_SESSION=${MOSH_NEW_SESSION:-0}" "$container_name" bash /mosh-config/launch.sh
   $RUNTIME stop "$container_name" 2>/dev/null || true
-  rm -f "${RESOLVED_ENV_FILE:-}"
 }
 
 # ---------------------------------------------------------------------------

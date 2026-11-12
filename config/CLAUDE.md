@@ -24,8 +24,8 @@
 
 Besides the usual tools, the container has:
 
-- **`gh`**: GitHub CLI, authenticated via `GITHUB_PERSONAL_ACCESS_TOKEN` from `.env`.
-  `gh api` covers raw REST/GraphQL.
+- **`gh`**: GitHub CLI. It is **not** logged in (it reads `GH_TOKEN`, which isn't set).
+  `git push` and `git pull` authenticate through a credential helper instead.
 - **`rg`**, **`fd`**: fast grep and find that respect `.gitignore`.
 - **`ast-grep` (`sg`)**: structural search by AST pattern, for refactors that regex
   can't express cleanly.

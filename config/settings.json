@@ -14,7 +14,9 @@
       "Grep(*)",
       "NotebookEdit(*)"
     ],
-    "deny": []
+    "deny": [
+      "Read(.env)"
+    ]
   },
   "enabledPlugins": {
     "code-review@claude-plugins-official": true,

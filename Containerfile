@@ -61,8 +61,11 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
 # Destructive Command Guard (dcg) — binary only, no hooks wired by default.
 # Toggle on per-project at runtime with `mosh dcg on`.
 # ---------------------------------------------------------------------------
-RUN curl -fsSL https://raw.githubusercontent.com/Dicklesworthstone/destructive_command_guard/main/install.sh \
-    | bash -s -- --no-configure --system
+# Pinned to a release: the install script and binary both come from that tag,
+# not from whatever is on the repo's main branch at build time.
+ARG DCG_VERSION=v0.16.0
+RUN curl -fsSL "https://raw.githubusercontent.com/Dicklesworthstone/destructive_command_guard/${DCG_VERSION}/install.sh" \
+    | bash -s -- --version "${DCG_VERSION}" --no-configure --system
 
 # ---------------------------------------------------------------------------
 # Python: Playwright browser automation library
@@ -88,7 +91,7 @@ RUN npx -y playwright@$(node -e "console.log(require('$(npm root -g)/@playwright
 RUN find /ms-playwright -name chrome_crashpad_handler -exec sh -c 'mv "$1" "$1.disabled" && echo "#!/bin/sh" > "$1" && chmod +x "$1"' _ {} \;
 
 # ---------------------------------------------------------------------------
-# Non-root user — Claude Code refuses --dangerously-skip-permissions as root
+# Non-root user. Claude Code runs as `claude`, with no sudo and no capabilities.
 # ---------------------------------------------------------------------------
 # Both named-volume mountpoints must exist and be owned by claude BEFORE the
 # volumes are first mounted. Podman creates a missing mountpoint as root:root,

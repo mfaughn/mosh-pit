@@ -191,7 +191,7 @@ layer on top.
 
 | File | Purpose |
 |---|---|
-| `Containerfile` | Container image (node:20 + Claude Code + Playwright) |
+| `Containerfile` | Container image (node:22 + Claude Code + Playwright) |
 | `mosh` | Setup and launcher script |
 | `.env.example` | Template for secrets — copy to `.env` |
 | `.ports` | Host port allocations per project (gitignored, hand-editable) |
