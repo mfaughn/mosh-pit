@@ -4,9 +4,9 @@
 UADF adds two things to Claude Code:
 
 1. **Session continuity.** `JOURNAL.md` records what happened and what's next, so a new
-   session can pick up where the last one stopped. It lives in git, so it survives
-   `mosh fresh`, other machines and lost session history. Claude Code's auto memory
-   survives none of those.
+   session can pick up where the last one stopped. It lives in git, so it has history,
+   can be reviewed, and survives a deleted container volume or a move to another
+   machine. Claude Code's auto memory is local to one machine and outside git.
 2. **Decision records.** ADRs in `docs/adr/` record why significant choices were made.
 
 Everything else (planning, review, commits, subagents) is left to Claude Code's built-in
