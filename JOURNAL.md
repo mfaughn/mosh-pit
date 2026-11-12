@@ -395,7 +395,32 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   Sonnet 5 default, which the gateway served. The `Containerfile` `CMD` was changed to match.
   It only matters after a rebuild, and `mosh` normally runs `launch.sh` instead.
 
+- **Container security review** (commit after `53f9063`):
+  - Added `--security-opt=no-new-privileges` and bumped `MOSH_VERSION` to 5. It's a
+    creation-time flag, so **each project needs `mosh fresh`** to get it. Untested in a
+    real container, because containers can't be created from inside one. Check that
+    provisioning (`apt` as root) and Playwright still work after the first `mosh fresh`.
+  - Added a `Read(.env)` deny rule, the env-file cleanup trap, and a pinned `dcg` (v0.16.0,
+    which takes effect at the next `mosh build`).
+  - Left out on purpose: `--cap-drop=ALL` (breaks `apt` in provisioning), `--read-only`
+    (breaks self-update and installs), and resource limits (the VM caps them already).
+- **Follow-ups from the review:**
+  1. **GitHub PAT (user, on GitHub):** the token in every container is a *classic* PAT
+     with `admin:org`, `admin:org_hook`, `admin:public_key`, `admin:repo_hook`,
+     `repo`, `workflow`, `write:packages` and more, expiring 2027-11-10. Replace it with a
+     fine-grained token limited to the needed repos (Contents and Pull requests R/W, no
+     admin scopes).
+  2. **After that:** log `gh` in by adding `export GH_TOKEN="$GITHUB_PERSONAL_ACCESS_TOKEN"`
+     to `config/launch.sh`. Today `gh` is not logged in, because it reads `GH_TOKEN`; only
+     git uses the token, through the credential helper.
+  3. **Optional:** Podman's VM shares all of `/Users`. Limiting it to the project folders
+     would shrink what a container escape reaches, but that means recreating the VM.
+
 ### Things Worth Not Rediscovering
+- **The container appears to run as real root in the Podman VM** (`/proc/self/uid_map` is
+  `0 0 4294967295`), and the VM can see the Mac's `/Users`. The `claude` user has zero
+  effective capabilities, the default seccomp filter is on, and there's no sudo.
+- **`gh repo list` returning nothing is not evidence.** `gh` isn't logged in here.
 - **WebSearch is blocked by an org policy, not a settings rule.** Every call returns the
   Vertex error `constraints/vertexai.allowedPartnerModelFeatures … web_search for
   claude-haiku-5-5`, from the main session or a subagent. Tested 2026-11-12. The 11-10
