@@ -329,3 +329,77 @@ CNI→Netavark, slirp4netns→Pasta. Latest release at time of writing: v6.2.0, 
 `2026-11-10T20:01:54Z`.
 
 Caveat: `podman.io/blog` 404s, so this rests on the release notes alone.
+
+## Session Handoff — 2026-11-12 21:50
+
+### Completed This Session
+
+Reviewed the global CLAUDE.md and UADF against Anthropic's current guidance (the Fable 5.2
+and Opus 5.5 prompting guides, Claude Code's memory, best-practices and skills docs, and
+Lydia Hallie's talk "Rethinking Claude Code Best Practices", whose transcript is in
+`docs/references/`). The guidance comes down to: keep only what Claude can't learn from the
+code, rewrite "never/always" rules with their scope and reason, and delete cautions whose
+reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
+
+- `954e60a` Web search: the WebSearch tool is **blocked**, and the 11-10 "fix" was wrong
+  (correction added to that entry below). Searching works by fetching a Bing results page.
+- `ab09257` Global `config/CLAUDE.md` 154 → 98 lines.
+- `61b335c` Older journal entries moved to `JOURNAL_ARCHIVE.md`.
+- `7b55f48` Talk transcript added.
+- `ab087da` UADF v4.0.0: moved from `github.com/mfaughn/UADF` into `config/uadf/`. The
+  commands are now four skills that run only when typed. `launch.sh` copies them into
+  containers, and `config/uadf/install-host.sh` symlinks them on the host. See
+  `config/uadf/CHANGELOG.md`.
+- `75cb87b` New project `CLAUDE.md`, holding the facts the journal kept repeating.
+- `669bce7` Removed the v2 UADF README and the unused `config/templates/`. Also deleted the
+  `uadf/` clone, which was in sync with GitHub.
+
+### Current State
+- Branch: `main`, pushed to origin.
+- Verification:
+  - `/uadf-start` ran correctly via `claude -p` with an isolated `CLAUDE_CONFIG_DIR`.
+  - The container copy and host symlink installs were tested in temp dirs.
+  - `shellcheck` and `bash -n` are clean apart from 3 older notes in `launch.sh`.
+  - `/uadf-handoff` has **not** been run yet. Its first real use is the test.
+
+### Next Steps
+1. **On the host:** delete `~/.claude/commands/uadf/`, which is mounted into every
+   container and would show each command twice, as `/uadf:uadf-*`. Then run
+   `config/uadf/install-host.sh` if you want the skills on the host.
+2. Run `/uadf-handoff` at the end of the next session and check it follows the commit
+   rules: on `main` it reviews changes before writing the entry, and the journal is
+   always the last commit.
+3. Run `/doctor prompt-audit` (interactive) as a cross-check on the new instruction files.
+4. Carried over from 10-29: test plugin installs in a fresh container (`mosh fresh`), and
+   close the plugin-drift gap in `mosh update`.
+
+### Open Questions / Blockers
+- **Search:** set up a SearXNG-backed search (you have a working Cowork plugin) to replace
+  fetching Bing pages, or ask the GCP admin to allow `claude-haiku-5-5:web_search`.
+- **Effort:** `settings.json` sets `effortLevel: "high"` for every model. Opus 5.5
+  defaults to `medium`, Fable 5.2 to `high`. Keep it or remove it?
+- **Ideas from the talk, not done:**
+  - add a `Read(.env)` deny rule, because bypass mode lets Claude read the GitHub token;
+  - a `shellcheck` hook that exits with code 2 on failure;
+  - archive the GitHub UADF repo, or point its README here.
+- **`NOTES.md`** is stale in several places, for example "WebSearch denied". Only the rows
+  about UADF and templates were updated.
+
+### Things Worth Not Rediscovering
+- **WebSearch is blocked by an org policy, not a settings rule.** Every call returns the
+  Vertex error `constraints/vertexai.allowedPartnerModelFeatures … web_search for
+  claude-haiku-5-5`, from the main session or a subagent. Tested 2026-11-12. The 11-10
+  session only saw WebSearch appear in the tool list, and it never ran a search. Bing
+  result pages work through WebFetch or curl; DuckDuckGo returns a CAPTCHA, and Brave
+  returns 429.
+- **A symlink in `/workspace` can't reach a host path outside the mounts.** It resolves
+  inside the container. That's why UADF now lives in this repo.
+- **`disable-model-invocation: true` skills are invisible to the model.** Asking Claude
+  "what uadf skills do you have?" returns none. Test by invoking `/uadf-start` instead.
+- **`mosh fresh` keeps the `~/.claude` volume, so auto memory survives it.** The journal's
+  advantage is git: history, review, and other machines.
+- **Why the old handoff's WIP commit rarely happened.** The soft "if there are uncommitted
+  changes" step lost to Claude Code's built-in "commit only when asked" rule, and the
+  journal was written *after* the git check. The new skill says that invoking it
+  authorizes the commits.
+- **`git mv -k` on an untracked file silently does nothing.** Use plain `mv`.
