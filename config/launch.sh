@@ -35,6 +35,13 @@ for d in agents templates uadf; do
   [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
 done
 
+# UADF skills: Claude Code only discovers skills under ~/.claude/skills/<name>/.
+for skill in /mosh-config/uadf/skills/*/; do
+  [ -d "$skill" ] || continue
+  mkdir -p "$HOME/.claude/skills"
+  cp -rT "$skill" "$HOME/.claude/skills/$(basename "$skill")" 2>/dev/null || true
+done
+
 # Trust any extra CA certificates in /mosh-config/certs (e.g. the internal NIST
 # CA needed to reach the LiteLLM gateway). Without this, Claude Code fails with
 # "SSL certificate verification failed".
