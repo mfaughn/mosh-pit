@@ -225,8 +225,18 @@ if [ $CLAUDE_EXIT -ne 0 ] && [ $RESUMING -eq 1 ]; then
 fi
 
 # Persist OAuth credentials to shared volume so other projects can reuse them.
+# Only applies to OAuth logins; gateway auth (ANTHROPIC_API_KEY from .env) writes
+# no credentials file, so this is a no-op in that setup.
+#
+# Report a failed copy. A volume whose mountpoint was auto-created by Podman is
+# owned by root, leaving this unwritable by the container user — which otherwise
+# fails silently here and costs a re-authentication in every project.
 if [ -f ~/.claude/.credentials.json ]; then
-  cp ~/.claude/.credentials.json /home/claude/.oauth-creds/.credentials.json
+  if ! cp ~/.claude/.credentials.json /home/claude/.oauth-creds/.credentials.json 2>/dev/null; then
+    echo -e "\033[1;33m[mosh]\033[0m Could not save credentials to the shared store" >&2
+    echo -e "\033[1;33m[mosh]\033[0m $(ls -ld /home/claude/.oauth-creds 2>&1)" >&2
+    echo -e "\033[1;33m[mosh]\033[0m Other projects will each need their own login. Run 'mosh fresh' after rebuilding the image to fix the volume's ownership." >&2
+  fi
 fi
 
 # Save session ID for next resume.

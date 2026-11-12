@@ -90,8 +90,14 @@ RUN find /ms-playwright -name chrome_crashpad_handler -exec sh -c 'mv "$1" "$1.d
 # ---------------------------------------------------------------------------
 # Non-root user — Claude Code refuses --dangerously-skip-permissions as root
 # ---------------------------------------------------------------------------
+# Both named-volume mountpoints must exist and be owned by claude BEFORE the
+# volumes are first mounted. Podman creates a missing mountpoint as root:root,
+# and it never chowns a volume once it has content — so an auto-created
+# .oauth-creds leaves the container user unable to write there. The failure is
+# silent: launch.sh persists credentials with a bare `cp` and deliberately runs
+# without `set -e`, so the copy fails and nothing reports it.
 RUN useradd -m -s /bin/bash claude && \
-    mkdir -p /home/claude/.claude /workspace && \
+    mkdir -p /home/claude/.claude /home/claude/.oauth-creds /workspace && \
     chown -R claude:claude /home/claude /workspace /ms-playwright
 
 USER claude
