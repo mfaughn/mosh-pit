@@ -376,14 +376,24 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
 ### Open Questions / Blockers
 - **Search:** set up a SearXNG-backed search (you have a working Cowork plugin) to replace
   fetching Bing pages, or ask the GCP admin to allow `claude-haiku-5-5:web_search`.
-- **Effort:** `settings.json` sets `effortLevel: "high"` for every model. Opus 5.5
-  defaults to `medium`, Fable 5.2 to `high`. Keep it or remove it?
 - **Ideas from the talk, not done:**
   - add a `Read(.env)` deny rule, because bypass mode lets Claude read the GitHub token;
   - a `shellcheck` hook that exits with code 2 on failure;
   - archive the GitHub UADF repo, or point its README here.
 - **`NOTES.md`** is stale in several places, for example "WebSearch denied". Only the rows
   about UADF and templates were updated.
+
+### Decided After the Handoff
+- **Effort stays `high`** for every model. It's Fable 5.2's default anyway; for Opus 5.5
+  (default `medium`) it trades speed and cost for depth, which suits this work. Use
+  `/effort medium` per session when speed matters.
+- **Containers start in auto mode** (`--permission-mode auto` in `config/launch.sh`)
+  instead of `--dangerously-skip-permissions`. Applies on the next `mosh` launch, without
+  `mosh fresh`. Tested through the gateway: an ordinary `curl` ran without prompting, and an
+  exfiltration-style command was blocked with `[Data Exfiltration]`. The classifier
+  ignores `ANTHROPIC_DEFAULT_SONNET_MODEL` (the `[1m]` Sonnet 5.5 alias) and uses its
+  Sonnet 5 default, which the gateway served. The `Containerfile` `CMD` was changed to match.
+  It only matters after a rebuild, and `mosh` normally runs `launch.sh` instead.
 
 ### Things Worth Not Rediscovering
 - **WebSearch is blocked by an org policy, not a settings rule.** Every call returns the
