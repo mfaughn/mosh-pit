@@ -201,6 +201,7 @@ layer on top.
 | `config/git-credential-helper` | GitHub token auth helper for containers |
 | `config/agents/` | Custom subagents (web-researcher) |
 | `config/uadf/` | UADF framework files |
+| `docs/volume-backup-restore.md` | Backing up volumes before a Podman upgrade |
 
 ## Customizing
 
