@@ -355,7 +355,7 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   `uadf/` clone, which was in sync with GitHub.
 
 ### Current State
-- Branch: `main`, pushed to origin.
+- Branch: `main`, pushed to origin. Last commit: the journal update after `b06773f`.
 - Verification:
   - `/uadf-start` ran correctly via `claude -p` with an isolated `CLAUDE_CONFIG_DIR`.
   - The container copy and host symlink installs were tested in temp dirs.
@@ -366,12 +366,31 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
 1. **On the host:** delete `~/.claude/commands/uadf/`, which is mounted into every
    container and would show each command twice, as `/uadf:uadf-*`. Then run
    `config/uadf/install-host.sh` if you want the skills on the host.
-2. Run `/uadf-handoff` at the end of the next session and check it follows the commit
+2. **Rebuild and recreate, starting with one test project.** Back up the current image,
+   then build, then recreate:
+   ```bash
+   podman tag claude-dev:latest claude-dev:pre-v5   # rollback point
+   mosh build
+   mosh fresh                                       # in one test project
+   ```
+   The rebuild changes more than the `dcg` pin: every later layer installs whatever is
+   newest at build time (Playwright, `@playwright/mcp`, Chromium, Claude Code). After
+   `mosh fresh`, check three things:
+   - the project's `provision.sh` installed its packages, which shows `no-new-privileges`
+     doesn't block `apt` as root;
+   - Playwright starts, if the project uses it;
+   - the status bar says "auto mode on".
+
+   If something breaks, run `podman tag claude-dev:pre-v5 claude-dev:latest` and
+   `mosh fresh` again. If it still breaks, the cause is the flag, not the new image. If all
+   is well, recreate the other projects with `mosh fresh` whenever convenient. They keep
+   working meanwhile, without the flag. This also covers the plugin-install test in step 5.
+3. Run `/uadf-handoff` at the end of the next session and check it follows the commit
    rules: on `main` it reviews changes before writing the entry, and the journal is
    always the last commit.
-3. Run `/doctor prompt-audit` (interactive) as a cross-check on the new instruction files.
-4. Carried over from 10-29: test plugin installs in a fresh container (`mosh fresh`), and
-   close the plugin-drift gap in `mosh update`.
+4. Run `/doctor prompt-audit` (interactive) as a cross-check on the new instruction files.
+5. Carried over from 10-29: test plugin installs in a fresh container (step 2 does
+   this), and close the plugin-drift gap in `mosh update`.
 
 ### Open Questions / Blockers
 - **Search:** set up a SearXNG-backed search (you have a working Cowork plugin) to replace
