@@ -88,12 +88,52 @@ mapping. Tell the user which container port you bound and let them map it, or
 read `$MOSH_PORT_BASE` — host port = `$MOSH_PORT_BASE` + the index of your port
 within `$MOSH_PORTS`.
 
-## Web Search Policy
-Do not use the WebSearch tool directly — it is blocked on this model. Instead,
-always delegate web searches to the `web-researcher` subagent, which runs on a
-model that has web search access. Use the Task tool with
-`subagent_type: "general-purpose"` and `model: "sonnet"` or reference the
-web-researcher agent file.
+## Web Research
+
+`WebSearch` is available directly — use it. The old policy here said to delegate
+searches to the `web-researcher` subagent because WebSearch was "blocked on this
+model." That was self-inflicted: `deny: ["WebSearch"]` in `config/settings.json`
+removed the tool, and a bare-name deny strips a tool from **subagents as well as
+the parent**, so delegating could never restore it. The subagent ran with only
+`WebFetch` and answered by guessing URLs. The deny has been removed.
+
+The `web-researcher` subagent is still useful for farming out bulky research so
+its page-fetching does not fill this context — but it is a context-management
+choice now, not a capability workaround.
+
+### Getting reliable results out of WebFetch
+
+**WebFetch does not hand you the page.** It runs the content through a small, fast
+summarizing model and returns that summary. The summarizer misreads things, and it
+does so silently and confidently. Observed failure: a GitHub release page whose
+publish date was reported as "November 10, **2024**" when the actual value was
+`2026-11-10T20:01:54Z` — wrong by two years, with no hint anything was off.
+
+Treat every number, date, version and identifier from WebFetch as unverified until
+confirmed. In practice:
+
+- **Fetch raw structured data, not rendered pages.** `api.github.com/repos/OWNER/
+  REPO/releases/latest` instead of the HTML releases page; `raw.githubusercontent.com`
+  instead of a `github.com/.../blob/...` view. JSON gives the summarizer far less room
+  to paraphrase a value into something wrong.
+- **Name the exact field you want and demand it verbatim.** "Report the literal
+  `published_at` field" beats "when was this released?". Add "quote exactly, do not
+  paraphrase."
+- **Give it an explicit way to say nothing.** "If no such sentence exists, reply
+  NOT PRESENT." Without that, an absent fact tends to come back as a plausible
+  invention.
+- **Re-fetch to confirm anything load-bearing.** A second fetch with a narrower,
+  differently-worded prompt is cheap and catches exactly the date-style error above.
+  If two fetches disagree, trust neither until a third source settles it.
+- **Prefer a primary source over an aggregator.** Version-tracker sites lag and
+  contradict each other; the project's own API or repo does not.
+- **Use `offset` for long pages** rather than hoping one call covered the whole
+  document. A summary of a truncated page looks identical to a summary of a whole one.
+- **Do not assume an unfamiliar URL is fabricated — check it.** A search returned
+  `github.com/podman-container-tools/podman`; it was dismissed as a hallucination
+  because the known repo is `containers/podman`. It was real — Podman moved to a
+  CNCF-owned org and that repo has 33k stars. Verify before disbelieving, the same
+  way you verify before believing. Both errors cost the same.
 
 ## UADF (Universal Agentic Development Framework)
 

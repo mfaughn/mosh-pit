@@ -14,9 +14,7 @@
       "Grep(*)",
       "NotebookEdit(*)"
     ],
-    "deny": [
-      "WebSearch"
-    ]
+    "deny": []
   },
   "enabledPlugins": {
     "code-review@claude-plugins-official": true,
