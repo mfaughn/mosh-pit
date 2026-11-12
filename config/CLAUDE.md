@@ -90,28 +90,27 @@ within `$MOSH_PORTS`.
 
 ## Web Research
 
-`WebSearch` is available directly — use it. The old policy here said to delegate
-searches to the `web-researcher` subagent because WebSearch was "blocked on this
-model." That was self-inflicted: `deny: ["WebSearch"]` in `config/settings.json`
-removed the tool, and a bare-name deny strips a tool from **subagents as well as
-the parent**, so delegating could never restore it. The subagent ran with only
-`WebFetch` and answered by guessing URLs. The deny has been removed.
+The `WebSearch` tool does not work here. The LiteLLM gateway's Vertex project has an
+org policy that rejects web search (`constraints/vertexai.allowedPartnerModelFeatures`),
+in the main session and in subagents alike. Only a GCP admin can change that.
 
-The `web-researcher` subagent is still useful for farming out bulky research so
-its page-fetching does not fill this context — but it is a context-management
-choice now, not a capability workaround.
+To search, fetch a search engine's results page instead:
+`WebFetch https://www.bing.com/search?q=your+query`, asking for the result titles and
+URLs quoted exactly. DuckDuckGo returns a CAPTCHA and Brave rate-limits, so use Bing.
+Then fetch the pages the results point to.
+
+Use the `web-researcher` subagent when the research is bulky enough that its page
+fetches would crowd this context.
 
 ### Getting reliable results out of WebFetch
 
-**WebFetch does not hand you the page.** It runs the content through a small, fast
-summarizing model and returns that summary. The summarizer misreads things, and it
-does so silently and confidently. Observed failure: a GitHub release page whose
-publish date was reported as "November 10, **2024**" when the actual value was
-`2026-11-10T20:01:54Z` — wrong by two years, with no hint anything was off.
+WebFetch returns a small model's summary of the page, not the page itself, and that
+summary can misreport values without any sign of it. Example: a release published
+`2026-11-10T20:01:54Z` came back as "November 10, 2024". Treat numbers, dates,
+versions and identifiers from WebFetch as unverified until confirmed:
 
-Treat every number, date, version and identifier from WebFetch as unverified until
-confirmed. In practice:
-
+- **When an exact value matters, use `curl` from Bash.** It returns the raw bytes
+  with no summarizer in between.
 - **Fetch raw structured data, not rendered pages.** `api.github.com/repos/OWNER/
   REPO/releases/latest` instead of the HTML releases page; `raw.githubusercontent.com`
   instead of a `github.com/.../blob/...` view. JSON gives the summarizer far less room

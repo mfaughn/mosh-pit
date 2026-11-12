@@ -993,6 +993,14 @@ continuity), so the plan is simply: upgrade, `mosh fresh` per project, no backup
 
 ### FIXED: `deny: ["WebSearch"]` was disabling search everywhere, including subagents
 
+> **Correction (2026-11-12):** removing the deny did **not** make search work. The check
+> below only confirmed that WebSearch *appeared in the tool list*. It never ran a search.
+> Every real WebSearch call fails with a Vertex org-policy error
+> (`constraints/vertexai.allowedPartnerModelFeatures … disallowed feature web_search`),
+> in the main session and in subagents. So the original note, "blocked on this model",
+> was right, and the deny was redundant. Searching works by fetching a Bing results page
+> with WebFetch or curl. See the 2026-11-12 handoff.
+
 The CLAUDE.md policy said WebSearch was "blocked on this model" and to delegate searches
 to the `web-researcher` subagent. Both halves were wrong, and the workaround could never
 have worked.
