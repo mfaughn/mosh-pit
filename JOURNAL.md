@@ -363,10 +363,15 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   - `/uadf-handoff` has **not** been run yet. Its first real use is the test.
 
 ### Next Steps
-1. **On the host:** delete `~/.claude/commands/uadf/`, which is mounted into every
+1. ✅ *Done (confirmed 11-12).* **On the host:** delete `~/.claude/commands/uadf/`, which is mounted into every
    container and would show each command twice, as `/uadf:uadf-*`. Then run
    `config/uadf/install-host.sh` if you want the skills on the host.
-2. **Rebuild and recreate, starting with one test project.** Back up the current image,
+2. **Mostly done in mosh-pit (checked 11-12, after the handoff):** the image was rebuilt
+   (`dcg` 0.16.0), this container has `NoNewPrivs: 1`, auto mode is on, packages
+   installed, and the five default plugins installed. Playwright's Chromium layout had
+   changed and broke the MCP; fixed in `launch.sh` (see "Update after the handoff"
+   below). Still to do: recreate the other projects.
+   **Rebuild and recreate, starting with one test project.** Back up the current image,
    then build, then recreate:
    ```bash
    podman tag claude-dev:latest claude-dev:pre-v5   # rollback point
@@ -389,18 +394,18 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
    rules: on `main` it reviews changes before writing the entry, and the journal is
    always the last commit.
 4. Run `/doctor prompt-audit` (interactive) as a cross-check on the new instruction files.
-5. Carried over from 10-29: test plugin installs in a fresh container (step 2 does
-   this), and close the plugin-drift gap in `mosh update`.
+5. Carried over from 10-29: test plugin installs in a fresh container (✅ done, all five
+   installed), and close the plugin-drift gap in `mosh update`.
 
 ### Open Questions / Blockers
-- **Search:** set up a SearXNG-backed search (you have a working Cowork plugin) to replace
-  fetching Bing pages, or ask the GCP admin to allow `claude-haiku-5-5:web_search`.
+- **Search:** set up a SearXNG-backed search to replace fetching Bing pages, or ask the GCP
+  admin to allow `claude-haiku-5-5:web_search`. SearXNG now runs on the host at :8888,
+  but containers get "connection refused" (see "Update after the handoff").
 - **Ideas from the talk, not done:**
-  - add a `Read(.env)` deny rule, because bypass mode lets Claude read the GitHub token;
+  - ~~add a `Read(.env)` deny rule~~ (done in the security review below);
   - a `shellcheck` hook that exits with code 2 on failure;
-  - archive the GitHub UADF repo, or point its README here.
-- **`NOTES.md`** is stale in several places, for example "WebSearch denied". Only the rows
-  about UADF and templates were updated.
+  - ~~archive the GitHub UADF repo~~ (done 11-12: README points here, repo archived).
+- ~~**`NOTES.md`** is stale in several places~~ (fixed 11-12).
 
 ### Decided After the Handoff
 - **Effort stays `high`** for every model. It's Fable 5.2's default anyway; for Opus 5.5
@@ -457,3 +462,36 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   journal was written *after* the git check. The new skill says that invoking it
   authorizes the commits.
 - **`git mv -k` on an untracked file silently does nothing.** Use plain `mv`.
+
+### Update after the handoff (2026-11-12, later)
+- **Playwright MCP was broken in rebuilt images.** Playwright build 1254 moved the headless
+  shell to `chromium_headless_shell-*/chrome-headless-shell-linux-arm64/chrome-headless-shell`.
+  `launch.sh` still looked for the old `chrome-linux/headless_shell` path, so it passed
+  no `--executable-path`, and the MCP fell back to full Chromium. Full Chromium crashes here
+  ("Target page, context or browser has been closed"), while the headless shell works
+  (tested with the MCP's own `playwright-core`). `launch.sh` now tries both layouts and
+  warns if neither matches. This takes effect at the next `mosh` launch in projects with
+  `mosh playwright on`. Python Playwright was never affected.
+- **SearXNG isn't reachable from containers.** `host.containers.internal` resolves to
+  `192.168.127.254`, but port 8888 there refuses the connection. The host server is most
+  likely bound to `127.0.0.1`, and it would need to listen on an address the Podman VM can
+  reach. The Cowork plugin isn't needed in containers: it starts SearXNG in its own
+  container, which doesn't work from inside a container. They only need the URL.
+- **`web-researcher` agent** no longer tries `WebSearch`; it searches through Bing pages,
+  like the global `CLAUDE.md`.
+- **GitHub PAT:** you're not planning to replace it for now. The `GH_TOKEN` follow-up
+  waits on that decision.
+- **UADF GitHub repo archived**, with a README notice pointing to `config/uadf/` here.
+- `NOTES.md` brought up to date: web search, launch modes, MCP injection, base image,
+  the Chromium layout, the prevention of bind-mount contamination, and the file inventory.
+- **`mosh update` is the only way an existing container's Claude Code gets updated.**
+  Plain `mosh` resumes the container without updating, because `DISABLE_AUTOUPDATER=1`
+  and `autoUpdates: false` are set. Only a new container (`mosh fresh`) runs the installer.
+  Checked 11-13: this container's only binary, 2.1.323, dates from its creation. The
+  "drift gap" step is dropped, since `mosh update` is unused.
+- **SearXNG plan (11-13):** a shared Podman network `websearch`. The plugin's `searxng-up.sh`
+  (v0.1.3) now creates it and attaches SearXNG. Next: `mosh` v6 adds `--network websearch`
+  to new containers, then `mosh fresh` each project and test
+  `curl -s 'http://searxng:8080/search?q=test&format=json'`. Start with curl and a
+  `config/CLAUDE.md` note. For MCP tools later, copy the plugin's `server/dist/server.mjs`
+  into this repo rather than mounting the plugin folder.
