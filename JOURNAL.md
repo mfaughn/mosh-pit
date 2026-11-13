@@ -509,3 +509,9 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   (fixed in `703367b`). Check `git diff --summary` for mode changes after editing scripts.
 - **The user's TODO list:** review default plugins; run `/doctor prompt-audit`; finish tx
   integration with the desktop app (a different project).
+- **Default plugins reviewed (11-13):** dropped `code-review`, `code-simplifier`,
+  `ralph-loop` and `commit-commands`; kept `frontend-design`. Built-ins (`/code-review`,
+  `/simplify`, `/loop`) or the current models cover the four, and two of them depend on
+  `gh`, which isn't logged in. They're removed from `default-plugins.txt` and set to `false`
+  in `settings.json`, which disables them in existing containers at their next launch
+  (verified with an isolated `CLAUDE_CONFIG_DIR`). TODO list item done.
