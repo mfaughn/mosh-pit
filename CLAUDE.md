@@ -22,15 +22,22 @@ container: the global `CLAUDE.md`, `settings.json`, agents and UADF.
   `~/.claude/hooks/` at launch, like `agents/`. The transmissions mailbox
   (`config/transmissions/`, ADR-0002) is the exception: `mosh tx init` copies it into
   each project, so changes to `tx.sh` or `PROTOCOL.md` reach a project only when
-  `mosh tx init` is re-run there.
+  `mosh tx init` is re-run there. The desktop's `tx-desktop` skill (in the desktop app
+  account, not this repo) runs its own checksummed copy of `tx.sh`, so a change to
+  `config/transmissions/tx.sh` also means updating that copy and checksum from a desktop
+  session.
 - **`/workspace` is a bind mount of the host project.** Destructive commands there change
   the host's files. The container does not protect them.
+- **The Claude desktop app can have this folder connected too**, so it and the container
+  edit the same working tree. Only one of them should edit at a time.
 
 ## Writing shell code here
 
 - `mosh` must run on macOS's bash 3.2: no associative arrays, and no `"${arr[@]}"` on an
   empty array under `set -u`.
 - A function whose stdout is its return value must send messages to stderr.
+- Don't edit scripts with `sed -i`: here it can drop the execute bit (it turned `mosh`
+  from 755 to 644). Use the Edit tool, and check `git diff --summary` for mode changes.
 - There is no test suite. Check with `shellcheck` and `bash -n`, and run changed paths
   with stubs or an isolated `CLAUDE_CONFIG_DIR` (`claude -p` works there). Some
   shellcheck notes predate current work. Judge only the lines you changed.
