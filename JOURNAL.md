@@ -2,114 +2,6 @@
 
 Older entries: [JOURNAL_ARCHIVE.md](JOURNAL_ARCHIVE.md).
 
-## Session Handoff — 2026-10-29 14:12
-
-### Completed This Session
-
-- **Found why plugin installs failed after a Claude Code update, and fixed it in `mosh`.**
-  Not a Claude Code regression — `claude plugin install` works fine on 2.1.292 and the CLI
-  surface is unchanged. The cause is that **`mosh` never registered a plugin marketplace**
-  (`grep marketplace mosh config/launch.sh` → no hits). `claude plugin install
-  name@marketplace` resolves the marketplace from the container's `~/.claude` volume, so on
-  a volume that has never had one registered, *every* install fails:
-
-  ```
-  ✘ Failed to install plugin "code-review@claude-plugins-official":
-    Plugin "code-review" not found in marketplace "claude-plugins-official".
-  ```
-
-  That all-or-nothing shape matches the reported symptom ("failed to install any of them")
-  better than a partial failure would.
-
-- **Three changes to `mosh`** (uncommitted, in the working tree):
-
-  1. **`register_marketplaces()` + `PLUGIN_MARKETPLACES` array** — registers marketplaces
-     before any install. Idempotent (~0.7s when already present), so it runs unconditionally
-     rather than behind a check. This is the actual bug fix.
-  2. **Failures are loud** — `install_plugins()` collects failures, reports them via `error`
-     with names, returns non-zero. New-container path now prints `Setup complete, but some
-     plugins failed to install` instead of a clean "Setup complete." The old silent yellow
-     `warn` is precisely how a five-plugin wipeout scrolled past unnoticed.
-  3. **`heal_plugins()` on the reuse path** — the existing-container branch previously ran
-     `start` → `exec launch.sh` → `return` and never touched plugins, so a volume that lost
-     its state stayed broken on every future launch. Now gated on a ~0.6s
-     `plugin list --json | jq length` probe; the full install pass runs only when state is
-     actually missing. Repair failure warns and continues rather than blocking the session.
-
-  Also added `</dev/null` to the install call — a marketplace-declared confirmation prompt
-  on non-TTY stdin would otherwise hang the launch.
-
-- **Updated `README.md`** with the marketplace-ordering requirement and the self-heal behaviour.
-
-### Current State
-- Branch: `main`. **Uncommitted**: `mosh` (+120/-11), `README.md` (+6).
-- Last checkpoint: `7517423` — Correct [1m] guidance: Opus needs the tag too.
-- Tests: **No test suite exists in this repo** — nothing to run. Verification was
-  `bash -n` (clean), `shellcheck` (3 warnings, all pre-existing at lines 508/617/1028,
-  none in new code), and a stubbed-runtime harness covering: happy path, single-plugin
-  failure, marketplace-registration failure, heal-skip when healthy, heal-triggers when
-  empty, heal-failure-continues, missing per-project `plugins.txt`, and survival under
-  `set -e`. Plus the original bug end-to-end: against a virgin `CLAUDE_CONFIG_DIR` the old
-  call fails, `install_all_plugins` on that same dir installs all five.
-- Live container's real plugin state: all five reinstalled and enabled.
-- Backup of the pre-edit script at `/tmp/mosh.orig` (ephemeral — gone on container restart).
-
-### Next Steps
-1. **Commit the two modified files** — the user was asked and the session ended before
-   answering. Suggested message: `Register plugin marketplaces before installing`.
-2. **Verify against a genuinely fresh container**: `mosh fresh` and confirm all five
-   plugins install on first launch. Everything so far was verified via isolated
-   `CLAUDE_CONFIG_DIR`s, not a real container lifecycle.
-3. Consider making `mosh update` (mosh:~1012) check plugin state — see Blockers.
-
-### Open Questions / Blockers
-
-- **The 2.1.289 → 2.1.292 sequence is still unexplained.** `known_marketplaces.json` had
-  `lastUpdated: 13:40:17` and the plugin cache was fully populated with all five, yet
-  `installed_plugins.json` was `{"version":2,"plugins":{}}` at session start. *Something*
-  registered the marketplace and populated the cache **after** `install_plugins` had already
-  failed. Leading hypothesis (unproven): Claude Code's own startup resolves `enabledPlugins`
-  from the synced `settings.json`, which would also explain why plugin skills were available
-  in-session despite an empty install registry. If plugins vanish again after an update, start
-  here. The self-heal now papers over it, but does not explain it.
-
-- **`mosh update` still has the drift gap.** It updates Claude Code in a stopped container
-  and exits without touching plugins. The binary lives on the **ephemeral overlay**, plugin
-  state on the **persistent volume**, so the two drift independently. The new self-heal
-  catches it on the next `mosh` launch, but only after the fact.
-
-### Relevant Context — things worth not rediscovering
-
-- **The ephemeral/persistent split is the root structural issue.** Verified via `df`:
-  `~/.claude` is a named volume on `/dev/vda4` (persists); `~/.local/share/claude/versions/`
-  is on the overlay (does not). Both `2.1.289` (Oct 5, image layer) and `2.1.292` (Oct 7,
-  the update) sat on the overlay. Any future "state disappeared after an update" bug should
-  be checked against this split first.
-
-- **v1→v2 schema migration was investigated and ruled out.** The new binary *silently
-  ignores* v1-shaped `installed_plugins.json` — no error, just "No plugins installed" —
-  which looks exactly like the bug. But 2.1.289 already writes v2 (confirmed by running the
-  old binary against an isolated config dir), so this was not the cause here. Worth
-  remembering as a failure mode: the silence makes it easy to misdiagnose.
-
-- **A marketplace dir that exists but is not a valid git clone does *not* break installs.**
-  Tested explicitly; it succeeded. An earlier "corrupted installLocation" warning seen in
-  testing was a red herring from a pointed-elsewhere `installLocation`, not the real failure.
-
-- **Useful probes:** `claude plugin list --json | jq length` is ~0.6s and is what
-  `heal_plugins` gates on. A re-install of an already-present plugin is ~2.5s, which is why
-  the probe exists rather than just re-running installs every launch.
-
-- **`bash -lc` resolves `claude` correctly** in this container (login shell keeps
-  `~/.local/bin` on PATH) — checked, because `heal_plugins` depends on it. `jq` is at
-  `/usr/bin/jq`.
-
-- **Methodology note:** the first diagnosis this session was wrong. It was presented as a
-  container-*build*-time issue; the user corrected that it happens when starting an
-  *existing* container that updates Claude Code before launching it. That correction is what
-  surfaced the reuse-path gap (fix #3) — the build path alone would not have explained a
-  recurring failure.
-
 ## Session Notes — 2026-11-10 22:40
 
 Investigating a startup warning about asterisk permission rules (see below) turned up an
@@ -532,3 +424,80 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   with symlinks. **Consequence:** any change to `config/transmissions/tx.sh` must be followed
   by updating the copy and checksum in `tx-desktop` from a desktop session. Verified that
   the checksum matches `tx.sh` on `main`.
+
+## Session Handoff — 2026-11-13 19:36
+
+### Completed This Session
+Picked up the 11-12 handoff. The bullets added under that entry ("Update after the
+handoff") give the detail; in short:
+
+- **Rebuild and recreate checked** in this container: the image is rebuilt (`dcg` 0.16.0),
+  `NoNewPrivs: 1`, auto mode is on, and the five default plugins installed. Found that
+  Playwright build 1254 moved the Chromium headless shell, so Playwright MCP fell back to
+  full Chromium, which crashes. `launch.sh` now finds both layouts (`c8e8507`). Not tested
+  with the MCP itself; the user deferred that until they next need Playwright.
+- **Docs:** `NOTES.md` brought up to date, the `web-researcher` agent stopped calling the
+  blocked WebSearch tool (`c8e8507`). The GitHub UADF repo was archived, with a README
+  pointing to `config/uadf/`.
+- **mosh v6** (`d34e661`): every `mosh` launch updates Claude Code (before, only new
+  containers did), and new containers join a shared Podman network, `websearch`, so they
+  reach the host's SearXNG at `http://searxng:8080`. Search instructions now try SearXNG
+  first, then Bing. **Verified on the Mac by the user:** SearXNG answers from a fresh
+  container, published ports still work, and launching prints "Updating Claude Code".
+- **Fixed a regression I caused:** an in-place `sed` edit dropped `mosh`'s execute bit,
+  so `mosh fresh` failed with "permission denied" (`703367b`).
+- **Default plugins:** dropped `code-review`, `code-simplifier`, `ralph-loop` and
+  `commit-commands`, and kept `frontend-design` (`c1acbff`).
+- **Transmissions mailbox merged** (`e011f9d`, ADR-0002 Accepted). A desktop app session
+  wrote it: a `transmissions/` folder per project, `tx-*` skills and an inbox hook in every
+  container, and `mosh tx init|status`. Review found and fixed two ways a container could
+  reach the host (`6d44a42`). The desktop side then hardened its own skill (`146ce49`).
+- Pushed to `origin/main`. The `tx-transmissions` branch was deleted after merging.
+
+### Current State
+- Branch: `main`, level with `origin/main`. Last commit before this entry: `5a13fcc`
+  Record the desktop side's transmissions security answer.
+- Nothing left uncommitted.
+- Verification: no test suite. `bash -n` and `shellcheck` on every changed script
+  (`mosh` and `launch.sh` keep 3 older notes each; the transmissions scripts are clean).
+  The new `mosh` functions were run against a fake `podman`. The mailbox was tested end to
+  end in a scratch project, and both security attacks were reproduced before the fix and
+  shown blocked after. mosh v6 was confirmed on the Mac by the user.
+
+### Next Steps
+1. **Test the mailbox in a real container.** In a project: `mosh tx init`, have the desktop
+   send a message, then check that the container announces it, that `/tx-inbox` processes
+   it, and that auto mode doesn't block the `tx.sh` calls.
+2. Run `mosh tx init` on the Mac once, to confirm it works under macOS's bash 3.2.
+3. Recreate the other projects with `mosh fresh` when convenient. Until then they search
+   through Bing and lack `no-new-privileges`.
+4. The user's own TODO list: run `/doctor prompt-audit`; finish tx integration with the
+   desktop app.
+
+### Open Questions / Blockers
+- **Lasting facts proposed for the project `CLAUDE.md`** (awaiting the user's answer):
+  don't edit scripts with `sed -i` and check `git diff --summary` for mode changes; the
+  desktop app and the container share one working tree, so only one should edit at a time;
+  changing `config/transmissions/tx.sh` means updating the copy and checksum in the
+  desktop's `tx-desktop` skill.
+- Playwright MCP after the path fix is untested (deferred by the user).
+- The GitHub token is still a classic PAT with admin scopes. The user isn't planning to
+  replace it, so `gh` stays logged out.
+
+### Things Worth Not Rediscovering
+- **Only a new container used to get a Claude Code update.** Containers have
+  `DISABLE_AUTOUPDATER=1`, so resumed containers stayed on their creation-day version until
+  mosh v6. Checked from this container's single installed version and its timestamp.
+- **SearXNG on the host is published only on the Mac's `127.0.0.1:8888`, on purpose**
+  (no login, rate limiter off). Containers reach it through the `websearch` network on
+  its internal port 8080, not through `host.containers.internal:8888`, which is refused.
+- **`sed -i` here can drop a file's execute bit** (it did to `mosh`, 755 → 644).
+- **Anything in `/workspace` is writable from the container, so the Mac must never run or
+  write through it blindly.** That was the root of both transmissions bugs: running the
+  project's `tx.sh`, and following planted symlinks. The desktop's sandbox has the same
+  issue, because it can write to every connected folder.
+- **Playwright's browser directory layout changes between builds**, not only the version
+  number. Full Chromium crashes in these containers ("Target page, context or browser has
+  been closed"); the headless shell works.
+- **Setting a plugin to `false` in `enabledPlugins` disables an installed plugin.**
+  Checked with `claude plugin list --json` under an isolated `CLAUDE_CONFIG_DIR`.
