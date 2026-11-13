@@ -12,7 +12,7 @@ How to get mosh running on a new machine. Designed to be given to Claude Code on
 ```bash
 # macOS
 brew install podman
-podman machine init
+podman machine init --memory 32768   # see "Sizing the Podman VM" under Notes
 podman machine start
 
 # Linux (Debian/Ubuntu)
@@ -163,7 +163,39 @@ Clean up: `rm -rf /tmp/test-project`
 - `mosh` auto-detects the runtime — no config needed
 - Podman runs rootless by default; Docker may need `sudo` or the user added to the `docker` group
 - Podman uses a VM on macOS (`podman machine`); Docker Desktop handles this automatically
-- If using Podman on macOS, ensure the machine has enough resources: `podman machine set --memory 8192 --cpus 4`
+- If using Podman on macOS, size the VM as described below
+
+### Sizing the Podman VM (macOS)
+
+On macOS every mosh container runs inside one shared Linux VM (`podman machine`).
+`mosh` sets no per-container memory limit, so the containers share whatever memory the
+VM has. Podman's default is about 2 GB, which is too small for more than one or two
+projects and far too small for a large JVM.
+
+Budget the VM as follows:
+
+- **An ordinary mosh project: 1–1.5 GB.** Claude Code alone uses about 400 MB, and a
+  container peaked at about 900 MB in light use. Builds, tests and Playwright push it higher.
+- **A JVM project: its heap (`-Xmx`) plus 2–3 GB** for what the JVM uses outside the
+  heap (metaspace, threads, GC), plus about 1 GB for Claude Code.
+- **The VM's own system and page cache: 1–2 GB.**
+- **Leave macOS at least half the Mac's RAM**, because the VM may hold onto memory once
+  it has used it.
+
+Example: a 64 GB Mac running one project with a 12 GB JVM and about 5–10 ordinary
+projects uses **32 GB** (16 GB for the JVM project, the rest for the others and the VM).
+
+To resize an existing VM (this stops every running container; the next `mosh` launch
+starts them again, with no `mosh fresh` needed):
+
+```bash
+podman machine stop
+podman machine set --memory 32768   # MiB
+podman machine start
+podman machine inspect --format '{{.Resources.Memory}}'   # confirm
+```
+
+Inside a container, `free -m` shows the VM's total memory.
 
 ### Container persistence
 
