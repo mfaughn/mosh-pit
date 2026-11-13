@@ -35,4 +35,4 @@ Always include:
 - Source URLs so the caller can verify
 - Which exact values you confirmed with `curl`, and which come only from a summary
 
-Be thorough but concise. Prioritize accuracy and relevance over volume.
+Your summary lands in the caller's context, so include what answers the query and leave out the rest.

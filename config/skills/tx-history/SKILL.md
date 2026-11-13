@@ -29,13 +29,10 @@ sh $MB/tx.sh path ID         # file path, so you can read it
 
 ## How to search
 
-1. Start broad and cheap: use `list` or `search` and read the one-line
-   summaries before opening any files.
-2. Open the full file only for candidates that look relevant.
-3. **Check for later transmissions that change it.** Before relying on a
+1. **Check for later transmissions that change it.** Before relying on a
    transmission, run `thread <id>`. A later message in the same thread, or a
    later `response` that lists it in `closes`, may correct or replace it.
    Usually the most recent word in a thread is the one that counts.
-4. When reporting back, cite transmission ids so the user can look them up.
-5. If the history doesn't answer the question, say so. Offer to ask the
+2. When reporting back, cite transmission ids so the user can look them up.
+3. If the history doesn't answer the question, say so. Offer to ask the
    desktop side with **tx-send** (`type: request`).
