@@ -4,9 +4,10 @@
 #
 # Note: playwright is intentionally not here — it's heavy and only useful for
 # browser automation. Toggle on per-project with `mosh playwright on`.
+#
+# Dropped 2026-11-13 because built-ins or the current models cover them:
+# code-review (built-in /code-review), code-simplifier (built-in /simplify),
+# ralph-loop (built-in /loop; current models keep going on long tasks), and
+# commit-commands. They stay disabled in settings.json for existing containers.
 
-code-review@claude-plugins-official
-code-simplifier@claude-plugins-official
-ralph-loop@claude-plugins-official
-commit-commands@claude-plugins-official
 frontend-design@claude-plugins-official
