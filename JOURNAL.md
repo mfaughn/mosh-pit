@@ -525,3 +525,10 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   `TX_ROOT` and a trusted copy too); a real launch test (skills appear, hook output reaches
   Claude, auto mode allows `tx.sh`); `mosh tx init` on macOS bash 3.2. The desktop app and
   the container share one working tree, so only one of them should edit at a time.
+- **Transmissions question #3 closed (11-13, `146ce49`, by the desktop session).** The
+  desktop runs `tx.sh` in its Linux sandbox, which can still write to every connected
+  folder, so its `tx-desktop` skill now runs an embedded, checksummed copy of `tx.sh`
+  (from `6d44a42`) with `TX_ROOT`, treats `PROTOCOL.md` as untrusted, and refuses mailboxes
+  with symlinks. **Consequence:** any change to `config/transmissions/tx.sh` must be followed
+  by updating the copy and checksum in `tx-desktop` from a desktop session. Verified that
+  the checksum matches `tx.sh` on `main`.
