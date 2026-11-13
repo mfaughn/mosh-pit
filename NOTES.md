@@ -21,8 +21,9 @@ The container's `~/.claude/` directory is split into two layers:
   To reset credentials, manually remove the volume: `podman volume rm cc-<project>-claude-home`
 - Config file changes in `config/` take effect on next launch (copied in).
 - Slash commands from `~/.claude/commands/` on the host are bind-mounted
-  directly into the volume at `~/.claude/commands/`, overriding whatever
-  the volume has at that path.
+  read-only at `~/.claude/commands/`, overriding whatever the volume has at
+  that path. Skills are not shared this way: UADF's skills are copied from
+  `config/uadf/skills/` into `~/.claude/skills/` at launch.
 
 ### Mirrored Files
 
@@ -30,22 +31,34 @@ These files exist in both `~/.claude/` (host) and `config/` (repo) but may diver
 
 | File | Host (`~/.claude/`) | Container (synced from `config/`) |
 |------|--------------------|-----------------------|
-| `CLAUDE.md` | Standard preferences | Adds web search policy |
-| `settings.json` | Limited permissions, sonnet default | YOLO permissions, WebSearch denied |
-| `commands/*.md` | Same content | Same content (manually synced) |
+| `CLAUDE.md` | Standard preferences | Adds container tools, ports, package tracking and web search notes |
+| `settings.json` | Limited permissions, sonnet default | Auto mode (set by `launch.sh`), `Read(.env)` denied, effort `high` |
+| `commands/*.md` | Source | Bind-mounted read-only from the host (not copied) |
 | `uadf/` | Symlinked to `config/uadf/` by `install-host.sh` | Copied from `config/uadf/` at launch; skills to `~/.claude/skills/` |
 | `agents/` | Does not exist on host | `web-researcher.md` for search delegation |
 
-### Web Search Delegation (2026-02-24)
+### Web Search (updated 2026-11-12)
 
-The Vertex AI organization policy blocks `web_search` for Opus 4.6 but allows
-it for Sonnet 4.5. To work around this:
+The `WebSearch` tool does not work in containers, for any model, in the main
+session or a subagent. Every call fails with the Vertex org-policy error
+`constraints/vertexai.allowedPartnerModelFeatures … web_search`. Only a GCP admin
+can lift that.
 
-- `WebSearch` is denied in the container's `settings.json`
-- A custom subagent `config/agents/web-researcher.md` is configured with
-  `model: sonnet`, which has web search access
-- The container's `CLAUDE.md` instructs Claude to use this subagent for all
-  web searches instead of calling WebSearch directly
+The workaround is to fetch a search engine's results page with WebFetch or `curl`.
+Bing works; DuckDuckGo returns a CAPTCHA and Brave returns 429. The container
+`CLAUDE.md` says how, and `config/agents/web-researcher.md` does the same for bulky
+research.
+
+History: in 2026-02 the policy blocked Opus but allowed Sonnet, so `WebSearch` was
+denied in `settings.json` and a Sonnet subagent did the searching. The policy has
+since tightened to every model, so that setup stopped working.
+
+A SearXNG server on the host would be a better search backend. The Cowork plugin
+publishes it only on the Mac's `127.0.0.1:8888`, so containers can't reach it
+(`host.containers.internal:8888` is refused). Publishing it more widely would expose
+an unauthenticated server to every network the Mac joins. The plan instead (2026-11-13)
+is a shared Podman network, `websearch`: the plugin's `searxng-up.sh` attaches SearXNG
+to it, and `mosh` puts new containers on it, so they reach `http://searxng:8080`.
 
 ### OAuth Token Persistence in Containers (2026-03-08)
 
@@ -100,13 +113,13 @@ Key takeaway: on Linux, Claude Code credential storage requires a writable
 `~/.claude/` directory. A bind-mounted host directory with a different UID
 will silently fail all credential writes.
 
-### Launch Modes (2026-02-24)
+### Launch Modes (2026-02-24, script renamed to `mosh` since)
 
-The `claude-dev.sh` script supports three launch modes:
+`mosh` supports three launch modes:
 
 1. **No arguments** — mounts `$(pwd)` as `/workspace`
-2. **Single path** — `claude-dev ~/projects/app` mounts it as `/workspace`
-3. **Multiple paths** — `claude-dev ~/proj/fe ~/proj/be` mounts each as
+2. **Single path** — `mosh ~/projects/app` mounts it as `/workspace`
+3. **Multiple paths** — `mosh ~/proj/fe ~/proj/be` mounts each as
    `/workspace/<dirname>` (e.g. `/workspace/fe`, `/workspace/be`)
 
 All modes call `podman run` directly. There was once a `compose.yaml`, but
@@ -122,9 +135,17 @@ in podman containers. The `chrome_crashpad_handler` subprocess cannot initialize
 and the crash is not fixable with `--no-sandbox`, `--shm-size`, or disabling
 crashpad alone.
 
-**Solution**: Use the headless shell binary (`chromium_headless_shell-XXXX/
-chrome-linux/headless_shell`) instead. This binary works reliably in containers.
-The MCP config specifies it via `--executable-path`.
+**Solution**: Use the headless shell binary instead. It works reliably in
+containers. `launch.sh` finds it under `/ms-playwright/chromium_headless_shell-*/`
+and passes it to the MCP as `--executable-path`.
+
+The headless shell's path inside that directory changed with build 1254: from
+`chrome-linux/headless_shell` to `chrome-headless-shell-linux-arm64/chrome-headless-shell`.
+The old glob stopped matching, and the MCP silently fell back to full Chromium, which
+crashes (verified 2026-11-12: full Chromium fails with "Target page, context or browser
+has been closed", the headless shell works). `launch.sh` now checks both layouts and
+warns when it finds neither. The Containerfile also replaces `chrome_crashpad_handler`
+with a no-op, but that alone doesn't make full Chromium start.
 
 Additionally, the MCP server (`@playwright/mcp@latest`) and the Python
 `playwright` package may bundle different playwright-core versions that expect
@@ -137,17 +158,18 @@ Claude Code overwrites `~/.claude.json` on exit, stripping manually-added
 `mcpServers` entries. The `.mcp.json` project-level config requires a trust
 dialog that doesn't persist reliably.
 
-**Solution**: The launch script (`claude-dev.sh`) injects MCP server config
-from `config/mcp.json` into `config/claude.json` using a Python one-liner
-before every container launch. This runs on the host side before the container
-starts, so it's always fresh.
+**Solution**: On every launch, `config/launch.sh` (inside the container)
+rebuilds `~/.claude.json`. It starts from `config/claude.json`, merges in the
+existing runtime state, and re-adds the servers from `config/mcp.json`. Playwright
+is opt-in per project (`mosh playwright on`). `open-brain` is added only when
+`OPENBRAIN_MCP_KEY` is set.
 
 ### Base Image (2026-02-24)
 
 There is no official `anthropic/claude-code` Docker image. The Containerfile
-uses `node:20` as the base and installs Claude Code via
-`npm install -g @anthropic-ai/claude-code@latest`. This matches the approach
-used in Anthropic's official devcontainer reference at
+uses `node:22` as the base and installs Claude Code with the native installer
+(`curl -fsSL https://claude.ai/install.sh | bash`, as user `claude`, into
+`~/.local`). The npm package is deprecated. Anthropic's devcontainer reference is at
 https://github.com/anthropics/claude-code/tree/main/.devcontainer
 
 ### Config File Naming
@@ -160,8 +182,8 @@ Claude Code uses two separate config files:
 MCP servers must go in `~/.claude.json`, NOT in `settings.json`. In the
 container, these map to:
 
-- `config/settings.json` → `/home/claude/.claude/settings.json`
-- `config/claude.json` → `/home/claude/.claude.json`
+- `config/settings.json` → `/home/claude/.claude/settings.json` (copied)
+- `config/claude.json` → `/home/claude/.claude.json` (used as the base of a merge; see above)
 
 ### Idle Session Hang — FUSE Stall (2026-03-10)
 
@@ -278,27 +300,34 @@ cd ~/projects/v2ig && mosh fresh     # if still running
 Each will get its own named volume (`cc-ezfhir-claude-home`, etc.) with
 isolated per-project state. Credentials will need re-authentication.
 
-**Preventive measure to consider**: The `mosh` script could detect old
-bind-mounted containers on resume and warn the user to run `mosh fresh`, or
-automatically migrate them. Currently it silently resumes with whatever mount
-configuration the container was originally created with.
+**Prevented since**: containers now carry a `mosh.version` label. On resume,
+`mosh` refuses containers below `MOSH_MIN_COMPAT` (unlabeled ones count as v0),
+warns about older ones, and refuses a container whose `/workspace` mounts differ
+from the requested ones.
 
 ## File Inventory
 
 | File/Dir | Purpose | Committed? |
 |----------|---------|------------|
-| `Containerfile` | Container image definition (node:20 + claude code + playwright) | Yes |
+| `Containerfile` | Container image (node:22, Playwright, dcg, gh, Claude Code) | Yes |
 | `.env.example` | Template for secrets | Yes |
 | `.env` | Actual secrets | No (gitignored) |
-| `mosh` | Setup and launcher script | Yes |
-| `config/` | Repo-managed config files, synced into container at launch | Yes |
-| `config/settings.json` | YOLO permissions, denied WebSearch | Yes |
-| `config/launch.sh` | Runs inside the container: syncs config, then starts Claude | Yes |
-| `config/claude.json` | User-level config baseline (autoUpdates, etc.) | Yes |
-| `config/mcp.json` | MCP server definitions | Yes |
+| `mosh` | Host-side setup and launcher script (macOS bash 3.2) | Yes |
+| `config/` | Repo-managed config, mounted at `/mosh-config` and synced in at launch | Yes |
+| `config/launch.sh` | Runs inside the container: syncs config, rebuilds `~/.claude.json`, starts Claude in auto mode | Yes |
+| `config/settings.json` | Permissions (`Read(.env)` denied), plugins, effort, status line | Yes |
+| `config/claude.json` | Base for `~/.claude.json` (theme, onboarding, autoUpdates) | Yes |
+| `config/mcp.json` | MCP server definitions (Playwright opt-in, open-brain) | Yes |
 | `config/CLAUDE.md` | Container-specific global preferences | Yes |
-| `config/commands/` | Slash commands (mirrored from ~/.claude/commands/) | Yes |
+| `config/agents/` | Custom subagents (`web-researcher.md`) | Yes |
 | `config/uadf/` | UADF framework and skills (source of truth) | Yes |
-| `config/agents/` | Custom subagents (web-researcher.md) | Yes |
-| `NOTES.md` | This file — ongoing project notes | Yes |
-| `README.md` | User-facing documentation | Yes |
+| `config/default-plugins.txt` | Plugins installed in every new container | Yes |
+| `config/certs/` | Extra CA certificates (NIST CA for the gateway) | Yes |
+| `config/git-credential-helper` | Supplies the GitHub token to git from the environment | Yes |
+| `config/gitignore_global`, `config/statusline.sh` | Global gitignore and status line | Yes |
+| `CLAUDE.md` | Project instructions for Claude | Yes |
+| `JOURNAL.md`, `JOURNAL_ARCHIVE.md`, `docs/adr/` | UADF handoffs and decision records | Yes |
+| `docs/` | GitHub auth and volume backup guides, reference material | Yes |
+| `README.md`, `SETUP-GUIDE.md`, `ROADMAP.md` | User-facing documentation | Yes |
+| `tini-fix-brief.md` | Zombie-process investigation | Yes |
+| `NOTES.md` | This file: ongoing project notes | Yes |

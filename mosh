@@ -1306,7 +1306,7 @@ Commands:
   restore   Replace current container with a saved snapshot
   fresh     Remove existing container and start clean from base image
   provision Re-run config/provision.sh in the project's container
-  update    Update Claude Code (npm) inside existing container without launching
+  update    Update Claude Code inside existing container without launching
   dcg        Toggle the destructive-command-guard hook (on|off|status)
   playwright Toggle the Playwright MCP server (on|off|status)
   ports      Show this project's host port map (or 'ports list' for all)

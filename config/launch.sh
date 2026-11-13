@@ -115,9 +115,17 @@ if "playwright" in servers:
         # Resolve the chromium headless_shell binary dynamically. Playwright
         # revs the bundled Chromium version, so a hardcoded path goes stale
         # every few months and Playwright MCP fails to start.
-        shells = sorted(glob.glob(
-            "/ms-playwright/chromium_headless_shell-*/chrome-linux/headless_shell"
-        ))
+        # The directory layout changes too: older builds used
+        # chrome-linux/headless_shell, newer ones (1254+) use
+        # chrome-headless-shell-linux-<arch>/chrome-headless-shell. If neither
+        # matches, the MCP falls back to full Chromium, which crashes on ARM64.
+        shells = sorted(
+            glob.glob("/ms-playwright/chromium_headless_shell-*/chrome-linux/headless_shell")
+            + glob.glob("/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux-*/chrome-headless-shell")
+        )
+        if not shells:
+            print("\033[1;33m[mosh]\033[0m Playwright: no Chromium headless shell found "
+                  "in /ms-playwright; the MCP will try full Chromium, which crashes on ARM64.")
         if shells:
             args = servers["playwright"].setdefault("args", [])
             if "--executable-path" not in args:
