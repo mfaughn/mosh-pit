@@ -66,6 +66,15 @@ summary_line() {
 
 cmd=${1:-help}; [ $# -gt 0 ] && shift
 
+# The canonical copy in mosh-pit's config/transmissions/ is a template, not a
+# mailbox: refuse to create mail directories next to it.
+case "$cmd" in
+  help|root|field) ;;
+  *) if [ "$(field "$ROOT/PROTOCOL.md" project 2>/dev/null)" = PROJECT_NAME ]; then
+       die "this is the template copy; use the project's own transmissions/tx.sh (create it with 'mosh tx init')"
+     fi ;;
+esac
+
 case "$cmd" in
   root) echo "$ROOT" ;;
 
