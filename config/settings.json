@@ -19,10 +19,10 @@
     ]
   },
   "enabledPlugins": {
-    "code-review@claude-plugins-official": true,
-    "code-simplifier@claude-plugins-official": true,
-    "ralph-loop@claude-plugins-official": true,
-    "commit-commands@claude-plugins-official": true,
+    "code-review@claude-plugins-official": false,
+    "code-simplifier@claude-plugins-official": false,
+    "ralph-loop@claude-plugins-official": false,
+    "commit-commands@claude-plugins-official": false,
     "frontend-design@claude-plugins-official": true
   },
   "skipDangerousModePermissionPrompt": true,
