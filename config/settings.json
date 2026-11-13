@@ -30,5 +30,27 @@
   "statusLine": {
     "type": "command",
     "command": "/home/claude/.claude/statusline.sh"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh /home/claude/.claude/hooks/tx-check.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh /home/claude/.claude/hooks/tx-check.sh"
+          }
+        ]
+      }
+    ]
   }
 }

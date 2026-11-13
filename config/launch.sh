@@ -35,12 +35,21 @@ for d in agents uadf; do
   [ -d "/mosh-config/$d" ] && cp -rT "/mosh-config/$d" "$HOME/.claude/$d" 2>/dev/null || true
 done
 
-# UADF skills: Claude Code only discovers skills under ~/.claude/skills/<name>/.
-for skill in /mosh-config/uadf/skills/*/; do
+# Skills: Claude Code only discovers skills under ~/.claude/skills/<name>/.
+# uadf/skills holds the UADF skills; skills/ holds mosh's own (the tx-* skills
+# for the desktop <-> container transmissions mailbox, see ADR-0002).
+for skill in /mosh-config/uadf/skills/*/ /mosh-config/skills/*/; do
   [ -d "$skill" ] || continue
   mkdir -p "$HOME/.claude/skills"
   cp -rT "$skill" "$HOME/.claude/skills/$(basename "$skill")" 2>/dev/null || true
 done
+
+# Hook scripts referenced from settings.json (e.g. hooks/tx-check.sh, which
+# announces unread desktop transmissions). Synced like the other directories.
+if [ -d /mosh-config/hooks ]; then
+  cp -rT /mosh-config/hooks "$HOME/.claude/hooks" 2>/dev/null || true
+  chmod +x "$HOME/.claude/hooks/"*.sh 2>/dev/null || true
+fi
 
 # Trust any extra CA certificates in /mosh-config/certs (e.g. the internal NIST
 # CA needed to reach the LiteLLM gateway). Without this, Claude Code fails with
