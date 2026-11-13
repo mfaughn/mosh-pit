@@ -495,3 +495,10 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   `curl -s 'http://searxng:8080/search?q=test&format=json'`. Start with curl and a
   `config/CLAUDE.md` note. For MCP tools later, copy the plugin's `server/dist/server.mjs`
   into this repo rather than mounting the plugin folder.
+- **mosh v6 (11-13):** new containers join the `websearch` network (created if missing;
+  `MOSH_NETWORK=` opts out), and every `mosh` launch now updates Claude Code before
+  checking plugins. A failed download warns and the launch continues. `mosh update`
+  and new containers share the same `update_claude_code` function. The container
+  `CLAUDE.md` and `web-researcher` now search through SearXNG first and fall back to
+  Bing. Tested with a stub `podman` only. **Next:** `mosh fresh` one project, then check
+  SearXNG with curl, a dev-server port, and the update message on a second launch.
