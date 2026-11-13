@@ -3,7 +3,15 @@
 # POSIX sh; works on macOS and Linux (incl. busybox). See PROTOCOL.md.
 set -eu
 
-ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# The mailbox is the directory this script is in, unless TX_ROOT names one.
+# `mosh tx` on the host sets TX_ROOT and runs mosh-pit's own copy of this
+# script, because the project's copy can be rewritten from inside a container,
+# and running it on the host would let the container run code there.
+if [ -n "${TX_ROOT:-}" ]; then
+  ROOT=$(CDPATH='' cd -- "$TX_ROOT" && pwd) || { echo "tx.sh: TX_ROOT is not a directory: $TX_ROOT" >&2; exit 1; }
+else
+  ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+fi
 DIRS="to-terminal/new to-terminal/read to-desktop/new to-desktop/read"
 
 die() { echo "tx.sh: $*" >&2; exit 1; }
@@ -123,8 +131,8 @@ EOF
     printf '%s' "$id" | grep -Eq '^[0-9]{8}T[0-9]{6}Z-[a-z0-9-]+$' || die "bad id format: $id"
     if ! valid_side "$from" || ! valid_side "$to" || [ "$from" = "$to" ]; then die "from/to must be desktop/terminal and differ"; fi
     case "$type" in info|request|response) ;; *) die "type must be info|request|response" ;; esac
-    [ -n "$title" ] && [ "$title" != TODO ] || die "title missing"
-    [ -n "$summ" ] && [ "$summ" != TODO ] || die "summary missing"
+    if [ -z "$title" ] || [ "$title" = TODO ]; then die "title missing"; fi
+    if [ -z "$summ" ] || [ "$summ" = TODO ]; then die "summary missing"; fi
     for r in $(list_items "$(field "$f" closes)") $(list_items "$(field "$f" in-reply-to)"); do
       path_of "$r" >/dev/null || echo "tx.sh: warning: referenced id not found: $r" >&2
     done

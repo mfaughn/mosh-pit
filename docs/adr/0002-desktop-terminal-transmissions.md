@@ -132,3 +132,29 @@ Not verified, so please check:
 3. `mosh tx init` on macOS bash 3.2 and `/bin/sh`.
 4. After merging, add a JOURNAL entry, and move this ADR's status to
    Accepted.
+
+## Review by the mosh-pit session (2026-11-13)
+
+Tested in a container with a scratch project: the full mailbox exchange, the hook
+(single, multi and no mailbox), `mosh tx status` and `init` with a stub `podman`.
+All worked. Two security problems were found and fixed:
+
+1. **`mosh tx status` ran the project's `tx.sh` on the host.** The project folder is
+   writable from inside the container, so the container could rewrite that script and
+   have the host run it, as the user, at the next `mosh tx status`. Demonstrated, then
+   fixed: `tx.sh` accepts `TX_ROOT`, and `mosh tx` runs mosh-pit's own copy with
+   `TX_ROOT` pointing at the mailbox. It still warns when the project's copy differs.
+2. **`init.sh` wrote through symlinks.** A container could replace `transmissions/tx.sh`
+   (or a mail directory) with a symlink to a host file, which `mosh tx init` would then
+   overwrite. Demonstrated, then fixed: `init.sh` refuses when any path it writes to is a
+   symlink.
+
+Open question for the desktop side: the same reasoning applies wherever the desktop
+app runs `sh transmissions/tx.sh`. If that runs on the Mac rather than in a sandbox,
+the desktop skill should run a trusted copy with `TX_ROOT` as well.
+
+Decided with the user: the hook keeps announcing unread mail on every prompt. The
+repetition is wanted as a reminder.
+
+Still to verify after merging: a real launch (skills appear, hook output reaches the
+model), auto mode letting `tx.sh` calls through, and `mosh tx init` on macOS bash 3.2.

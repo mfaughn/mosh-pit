@@ -1333,9 +1333,6 @@ cmd_ports() {
 }
 
 # ---------------------------------------------------------------------------
-# help
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
 # tx: the desktop <-> container transmissions mailbox (see ADR-0002).
 #
 # A project's mailbox is <project>/transmissions/. A Claude desktop app session
@@ -1347,6 +1344,10 @@ cmd_ports() {
 #   mosh tx status [dir]          Same, for a given project directory
 #   mosh tx init [dir] [name]     Create the mailbox, or refresh PROTOCOL.md and
 #                                 tx.sh in an existing one (mail is never touched)
+#
+# Security: the project folder is writable from inside the container, so this
+# never runs the project's own transmissions/tx.sh on the host. It runs
+# mosh-pit's copy and points it at the mailbox with TX_ROOT.
 # ---------------------------------------------------------------------------
 cmd_tx() {
   local subcmd="${1:-status}"
@@ -1379,13 +1380,14 @@ cmd_tx() {
         return 0
       fi
       local project open_requests
+      local tx_sh="$CLAUDE_CONFIG_DIR/transmissions/tx.sh"
       project=$(sed -n 's/^project: *//p' "$tx/PROTOCOL.md" | head -n 1)
       info "Mailbox: $tx (project: ${project:-?})"
-      if ! cmp -s "$CLAUDE_CONFIG_DIR/transmissions/tx.sh" "$tx/tx.sh"; then
+      if ! cmp -s "$tx_sh" "$tx/tx.sh"; then
         warn "This mailbox's tx.sh differs from config/transmissions/tx.sh; run '$(basename "$0") tx init' to refresh it."
       fi
-      info "Unread by container: $(sh "$tx/tx.sh" count terminal)    Unread by desktop: $(sh "$tx/tx.sh" count desktop)"
-      open_requests=$(sh "$tx/tx.sh" open) || true
+      info "Unread by container: $(TX_ROOT="$tx" sh "$tx_sh" count terminal)    Unread by desktop: $(TX_ROOT="$tx" sh "$tx_sh" count desktop)"
+      open_requests=$(TX_ROOT="$tx" sh "$tx_sh" open) || true
       if [[ -n "$open_requests" ]]; then
         info "Open requests:"
         printf '%s\n' "$open_requests"
@@ -1399,6 +1401,9 @@ cmd_tx() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# help
+# ---------------------------------------------------------------------------
 cmd_help() {
   cat <<EOF
 Usage: $(basename "$0") [command] [project-path ...]

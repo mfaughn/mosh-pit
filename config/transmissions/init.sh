@@ -22,6 +22,24 @@ fi
 proj=$(CDPATH='' cd -- "$proj" && pwd)
 tx="$proj/transmissions"
 
+# The project folder is writable from inside a mosh container, so anything in
+# the mailbox may have been replaced with a symlink to somewhere else on the
+# host. Writing through one would let the container overwrite host files, so
+# refuse if any path this script writes to is a symlink.
+for p in "$tx" "$tx/tx.sh" "$tx/PROTOCOL.md" "$tx/.gitignore" \
+         "$tx/to-terminal" "$tx/to-desktop"; do
+  if [ -L "$p" ]; then
+    echo "init.sh: refusing to write through a symlink: $p" >&2
+    exit 1
+  fi
+done
+for d in .tmp to-terminal/new to-terminal/read to-desktop/new to-desktop/read; do
+  if [ -L "$tx/$d" ] || [ -L "$tx/$d/.keep" ]; then
+    echo "init.sh: refusing to write through a symlink in: $tx/$d" >&2
+    exit 1
+  fi
+done
+
 action=created
 if [ -f "$tx/PROTOCOL.md" ]; then
   action=updated
