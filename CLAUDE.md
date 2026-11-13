@@ -18,6 +18,11 @@ container: the global `CLAUDE.md`, `settings.json`, agents and UADF.
   memory). The Claude Code binary is in `~/.local`, on the container's own layer, so
   `mosh fresh` removes it. Every `mosh` launch updates it to the latest release (mosh v6+),
   then checks the plugins.
+- **`config/skills/` and `config/hooks/`** are copied into `~/.claude/skills/` and
+  `~/.claude/hooks/` at launch, like `agents/`. The transmissions mailbox
+  (`config/transmissions/`, ADR-0002) is the exception: `mosh tx init` copies it into
+  each project, so changes to `tx.sh` or `PROTOCOL.md` reach a project only when
+  `mosh tx init` is re-run there.
 - **`/workspace` is a bind mount of the host project.** Destructive commands there change
   the host's files. The container does not protect them.
 

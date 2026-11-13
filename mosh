@@ -1335,6 +1335,70 @@ cmd_ports() {
 # ---------------------------------------------------------------------------
 # help
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# tx: the desktop <-> container transmissions mailbox (see ADR-0002).
+#
+# A project's mailbox is <project>/transmissions/. A Claude desktop app session
+# (with the host folder connected) and the container's Claude Code session
+# exchange markdown messages through it. The container side is the tx-* skills
+# and the tx-check.sh hook from config/; this command only manages the folder.
+#
+#   mosh tx                       Show mailbox status for the current directory
+#   mosh tx status [dir]          Same, for a given project directory
+#   mosh tx init [dir] [name]     Create the mailbox, or refresh PROTOCOL.md and
+#                                 tx.sh in an existing one (mail is never touched)
+# ---------------------------------------------------------------------------
+cmd_tx() {
+  local subcmd="${1:-status}"
+  if [[ $# -gt 0 ]]; then shift; fi
+  # `mosh tx <dir>` is shorthand for `mosh tx status <dir>`.
+  if [[ -d "$subcmd" ]]; then
+    set -- "$subcmd" "$@"
+    subcmd=status
+  fi
+  local dir="${1:-$PWD}"
+  local name="${2:-}"
+  local tx="$dir/transmissions"
+
+  case "$subcmd" in
+    init)
+      if [[ ! -d "$dir" ]]; then
+        error "Not a directory: $dir"
+        exit 1
+      fi
+      if [[ -n "$name" ]]; then
+        sh "$CLAUDE_CONFIG_DIR/transmissions/init.sh" "$dir" "$name"
+      else
+        sh "$CLAUDE_CONFIG_DIR/transmissions/init.sh" "$dir"
+      fi
+      info "Connect $dir in the Claude desktop app to use the mailbox from there."
+      ;;
+    status|"")
+      if [[ ! -f "$tx/PROTOCOL.md" ]]; then
+        info "No transmissions mailbox in $dir (create one with '$(basename "$0") tx init')."
+        return 0
+      fi
+      local project open_requests
+      project=$(sed -n 's/^project: *//p' "$tx/PROTOCOL.md" | head -n 1)
+      info "Mailbox: $tx (project: ${project:-?})"
+      if ! cmp -s "$CLAUDE_CONFIG_DIR/transmissions/tx.sh" "$tx/tx.sh"; then
+        warn "This mailbox's tx.sh differs from config/transmissions/tx.sh; run '$(basename "$0") tx init' to refresh it."
+      fi
+      info "Unread by container: $(sh "$tx/tx.sh" count terminal)    Unread by desktop: $(sh "$tx/tx.sh" count desktop)"
+      open_requests=$(sh "$tx/tx.sh" open) || true
+      if [[ -n "$open_requests" ]]; then
+        info "Open requests:"
+        printf '%s\n' "$open_requests"
+      fi
+      ;;
+    *)
+      error "Unknown tx subcommand: $subcmd"
+      error "Usage: $(basename "$0") tx [status|init] [project-dir] [name]"
+      exit 1
+      ;;
+  esac
+}
+
 cmd_help() {
   cat <<EOF
 Usage: $(basename "$0") [command] [project-path ...]
@@ -1353,6 +1417,7 @@ Commands:
   dcg        Toggle the destructive-command-guard hook (on|off|status)
   playwright Toggle the Playwright MCP server (on|off|status)
   ports      Show this project's host port map (or 'ports list' for all)
+  tx         Desktop <-> container transmissions mailbox (status|init)
   help       Show this help
 
 Launch modes:
@@ -1399,6 +1464,7 @@ case "${1:-}" in
   dcg)            shift; cmd_dcg "$@" ;;
   playwright)     shift; cmd_playwright "$@" ;;
   ports)          shift; cmd_ports "$@" ;;
+  tx)             shift; cmd_tx "$@" ;;
   new)            shift; MOSH_NEW_SESSION=1 cmd_launch "$@" ;;
   help|-h|--help) cmd_help ;;
   "")             cmd_launch ;;

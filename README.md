@@ -44,6 +44,8 @@ mosh ports                    Show this project's host port map
 mosh ports list               Show every project's port allocation
 mosh dcg [on|off|status]      Toggle the destructive-command-guard hook
 mosh playwright [on|off]      Toggle the Playwright MCP server
+mosh tx [status]              Show this project's transmissions mailbox
+mosh tx init [dir] [name]     Create (or refresh) a transmissions mailbox
 mosh help                     Show help
 ```
 
@@ -165,6 +167,34 @@ project-level config works out of the box:
 Global config from `config/` provides the baseline; project-level files
 layer on top.
 
+## Transmissions (desktop app <-> container)
+
+A Claude desktop app session can do research for a project while the
+container's Claude Code session implements, and the two can exchange messages
+during their sessions through a mailbox in the project: `transmissions/`. The
+desktop app connects the host project folder; the container sees the same
+folder at `/workspace`.
+
+```bash
+cd ~/projects/my-app
+mosh tx init            # creates transmissions/ (project name = directory name)
+mosh tx                 # unread counts and open requests
+```
+
+- **In the container**: the `tx-inbox`, `tx-send` and `tx-history` skills
+  come from `config/skills/` and are available in every container. A hook
+  (`config/hooks/tx-check.sh`) announces unread desktop mail at session start
+  and before each prompt. It prints nothing in projects without a mailbox.
+- **In the desktop app**: the `tx-desktop` skill (saved in the desktop app,
+  not in this repo) finds any connected folder that contains
+  `transmissions/PROTOCOL.md` and uses the `project:` name in it to tell
+  mailboxes apart.
+- **The protocol**: `config/transmissions/PROTOCOL.md` is the spec, and
+  `tx.sh` is the helper both sides use. `mosh tx init` copies both into the
+  project. Re-run it after changing them; it never touches mail.
+
+Design and alternatives considered: `docs/adr/0002-desktop-terminal-transmissions.md`.
+
 ## How It Works
 
 - **Filesystem isolation**: only your project directory is mounted into the
@@ -204,6 +234,9 @@ layer on top.
 | `config/git-credential-helper` | GitHub token auth helper for containers |
 | `config/agents/` | Custom subagents (web-researcher) |
 | `config/uadf/` | UADF framework files |
+| `config/skills/` | mosh's own skills (tx-* transmissions skills), synced to `~/.claude/skills/` |
+| `config/hooks/` | Hook scripts referenced by `settings.json`, synced to `~/.claude/hooks/` |
+| `config/transmissions/` | Transmissions mailbox protocol, `tx.sh` helper, `init.sh` |
 | `docs/volume-backup-restore.md` | Backing up volumes before a Podman upgrade |
 
 ## Customizing
