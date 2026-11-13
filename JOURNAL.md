@@ -515,3 +515,13 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   `gh`, which isn't logged in. They're removed from `default-plugins.txt` and set to `false`
   in `settings.json`, which disables them in existing containers at their next launch
   (verified with an isolated `CLAUDE_CONFIG_DIR`). TODO list item done.
+- **Transmissions mailbox merged (11-13, `e011f9d`, ADR-0002 Accepted).** A desktop app
+  session wrote it on `tx-transmissions`: `transmissions/` in each project, the `tx-*`
+  skills and an inbox hook in every container, and `mosh tx init|status`. My review found
+  two ways for a container to reach the host, both fixed in `6d44a42`: `mosh tx status`
+  ran the project's own `tx.sh`, and `init.sh` wrote through symlinks. The hook announces
+  unread mail on **every** prompt; the user wants that nagging. Not pushed yet (user's call).
+  **Open:** whether the desktop's `tx-desktop` skill runs `tx.sh` on the Mac (then it needs
+  `TX_ROOT` and a trusted copy too); a real launch test (skills appear, hook output reaches
+  Claude, auto mode allows `tx.sh`); `mosh tx init` on macOS bash 3.2. The desktop app and
+  the container share one working tree, so only one of them should edit at a time.

@@ -2,8 +2,9 @@
 
 ## Status
 
-Proposed (branch `tx-transmissions`, written by a Claude desktop app session
-on 2026-11-13 for review by the mosh-pit Claude Code session and the user).
+Accepted (merged to `main` 2026-11-13 after review and security fixes; see the
+review section at the end). Written by a Claude desktop app session on 2026-11-13
+on branch `tx-transmissions`.
 
 ## Date
 
