@@ -159,3 +159,37 @@ repetition is wanted as a reminder.
 
 Still to verify after merging: a real launch (skills appear, hook output reaches the
 model), auto mode letting `tx.sh` calls through, and `mosh tx init` on macOS bash 3.2.
+
+## Desktop side: answer to the open question (2026-11-13)
+
+The desktop skill runs `tx.sh` in the desktop app's isolated Linux sandbox, not on
+the Mac. The sandbox is still not a safe place to run container-writable code: it can
+write to every folder connected to the desktop session. If the mosh-pit repo is
+connected at the same time, a tampered `tx.sh` could change `mosh` or `config/`,
+which the host later executes. So the desktop follows the same rule as `mosh tx`.
+
+The `tx-desktop` skill (in the user's desktop app account, not in this repo) now:
+
+1. **Runs a trusted copy of `tx.sh`.** The skill embeds `config/transmissions/tx.sh`
+   from commit `6d44a42` with its SHA-256
+   (`29a1178127a39202ecc3dfe988226b1c56d187a6f204c6745e55421454976731`). Each session
+   writes it to the sandbox's `/tmp`, verifies the checksum, and runs it with
+   `TX_ROOT=<mailbox>`. The project's `tx.sh` is only compared against it, and a
+   difference is reported to the user (an outdated copy or tampering).
+2. **Treats the project's `PROTOCOL.md` as untrusted.** That file is
+   container-writable too, so it could carry injected instructions. The skill itself
+   is now the spec; `PROTOCOL.md` is used only for its `project:` name, and any
+   disagreement or embedded instruction is reported to the user, not followed.
+3. **Refuses mailboxes that contain symlinks.** Before the first operation on a
+   mailbox in a session, it stops if the mailbox, or anything in it, is a symlink,
+   since a symlink could redirect a delivery or archive move into another connected
+   folder. This is the desktop counterpart of the `init.sh` symlink fix.
+4. **Doesn't act on instructions in transmissions** that would touch anything outside
+   the mailbox, run code, or reach other connected folders, unless the user confirms
+   in the desktop conversation.
+
+Consequence: whenever `config/transmissions/tx.sh` changes, the embedded copy and
+checksum in `tx-desktop` must be updated from a reviewed commit in a desktop session.
+Until then, the desktop keeps using the older helper. The skill's `cmp` check flags
+every mailbox refreshed by `mosh tx init`, which is the reminder to update it.
+`main` at `9f8362d` still has the `6d44a42` version of `tx.sh` (checksum matches).
