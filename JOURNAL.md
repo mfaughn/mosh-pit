@@ -502,3 +502,10 @@ reason no longer holds. Branch `chore/instruction-review`, merged to `main`:
   `CLAUDE.md` and `web-researcher` now search through SearXNG first and fall back to
   Bing. Tested with a stub `podman` only. **Next:** `mosh fresh` one project, then check
   SearXNG with curl, a dev-server port, and the update message on a second launch.
+- **mosh v6 verified on the Mac (11-13)** in a fresh project container: `curl` to
+  `http://searxng:8080/search?...&format=json` returns results, port publishing works on
+  the `websearch` network, and a second `mosh` launch prints "Updating Claude Code".
+- **Permission slip:** an in-place `sed` edit in `c8e8507` dropped the execute bit on `mosh`
+  (fixed in `703367b`). Check `git diff --summary` for mode changes after editing scripts.
+- **The user's TODO list:** review default plugins; run `/doctor prompt-audit`; finish tx
+  integration with the desktop app (a different project).
