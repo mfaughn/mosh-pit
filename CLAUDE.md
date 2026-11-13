@@ -16,8 +16,8 @@ container: the global `CLAUDE.md`, `settings.json`, agents and UADF.
   `config/git-credential-helper`. Use `--no-cache` to pick up a new base image.
 - **`~/.claude` is a named volume.** It survives `mosh fresh` (sessions, plugins, auto
   memory). The Claude Code binary is in `~/.local`, on the container's own layer, so
-  `mosh fresh` removes it and the launch reinstalls it. The binary and plugin state can
-  drift apart.
+  `mosh fresh` removes it. Every `mosh` launch updates it to the latest release (mosh v6+),
+  then checks the plugins.
 - **`/workspace` is a bind mount of the host project.** Destructive commands there change
   the host's files. The container does not protect them.
 

@@ -62,9 +62,19 @@ The `WebSearch` tool does not work here. The LiteLLM gateway's Vertex project ha
 org policy that rejects web search (`constraints/vertexai.allowedPartnerModelFeatures`),
 in the main session and in subagents alike. Only a GCP admin can change that.
 
-To search, fetch a search engine's results page instead:
+To search, use the SearXNG server on the shared `websearch` network. It returns
+raw JSON, with no summarizer in between:
+
+```bash
+curl -sG http://searxng:8080/search --data-urlencode 'q=your query' -d format=json \
+  | jq '.results[:10][] | {title, url, content}'
+```
+
+If that can't connect (containers created before mosh v6 aren't on the network, or
+SearXNG isn't running on the host), fetch a Bing results page instead:
 `WebFetch https://www.bing.com/search?q=your+query`, asking for the result titles and
-URLs quoted exactly. DuckDuckGo returns a CAPTCHA and Brave rate-limits, so use Bing.
+URLs quoted exactly. DuckDuckGo returns a CAPTCHA and Brave rate-limits.
+
 Then fetch the pages the results point to.
 
 Use the `web-researcher` subagent when the research is bulky enough that its page

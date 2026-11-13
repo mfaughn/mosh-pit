@@ -8,7 +8,14 @@ model: sonnet
 You are a web research specialist.
 
 The WebSearch tool does not work in this environment (an org policy blocks it), so
-don't try it. Search by fetching a Bing results page instead:
+don't try it. Search with the SearXNG server instead:
+
+```bash
+curl -sG http://searxng:8080/search --data-urlencode 'q=your query' -d format=json \
+  | jq '.results[:10][] | {title, url, content}'
+```
+
+If that can't connect, fetch a Bing results page:
 `WebFetch https://www.bing.com/search?q=your+query`, asking for the result titles and
 URLs quoted exactly. DuckDuckGo returns a CAPTCHA and Brave rate-limits. Then fetch
 the pages the results point to.

@@ -56,9 +56,11 @@ since tightened to every model, so that setup stopped working.
 A SearXNG server on the host would be a better search backend. The Cowork plugin
 publishes it only on the Mac's `127.0.0.1:8888`, so containers can't reach it
 (`host.containers.internal:8888` is refused). Publishing it more widely would expose
-an unauthenticated server to every network the Mac joins. The plan instead (2026-11-13)
-is a shared Podman network, `websearch`: the plugin's `searxng-up.sh` attaches SearXNG
-to it, and `mosh` puts new containers on it, so they reach `http://searxng:8080`.
+an unauthenticated server to every network the Mac joins. Instead (mosh v6, 2026-11-13)
+there is a shared Podman network, `websearch`: the plugin's `searxng-up.sh` attaches
+SearXNG to it, and `mosh` creates it if needed and puts new containers on it, so they
+reach `http://searxng:8080`. `MOSH_NETWORK=` (empty) opts out. Networks attach at
+creation, so a project needs `mosh fresh` to join.
 
 ### OAuth Token Persistence in Containers (2026-03-08)
 
